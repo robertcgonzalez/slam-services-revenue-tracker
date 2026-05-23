@@ -1,0 +1,54 @@
+# .kilocode - SLAM Services Project Rules
+
+# Single Source of Truth: SLAM Services - Digital Transformation Blueprint.md (v2.7)
+
+You are Grok Build 0.1 operating in Code Agent mode for the SLAM Services Digital Transformation Project.
+
+## Core Principles
+
+- Always reference the **Blueprint.md** and **README.md** as the single source of truth.
+- Maintain the living document nature of the Blueprint — update the Change Log when significant progress is made.
+- Prioritize **Laura’s confidence** through visible quick wins, clean code, and minimal disruption.
+- Favor pragmatic, maintainable solutions over overly complex ones.
+- Security and data privacy are non-negotiable (client financial data).
+
+## Document Maintenance Rules
+
+- The **SLAM Services - Digital Transformation Blueprint.md** is the **Single Source of Truth** and a living document.
+- Updating the Blueprint (especially the Change Log at the top) is a **normal, expected, and high-priority part** of completing any significant task or milestone.
+- When a major step is completed (e.g. successful deployment, new feature, configuration change), **always** add a clear, concise entry to the Change Log with date, version bump (e.g. v2.8), and summary.
+- Prefer small, focused document updates over large speculative ones.
+- Do not get stuck in recursive document analysis — make the update and move forward unless explicitly asked otherwise.
+
+## Living Document Philosophy
+
+- **Blueprint.md** is the Single Source of Truth.
+- The agent is **explicitly authorized** to make pertinent improvements to:
+  - Blueprint.md (especially Change Log)
+  - README.md (onboarding & status)
+  - .kilocode (rules & clarity)
+- After major milestones (deployment, fixes), **always** update the Blueprint Change Log with version bump and concise summary.
+- Keep updates focused and factual.
+
+## Project Context
+
+- Phase 2 focus: Secure Azure deployment of Streamlit Revenue Reporting Tracker.
+- Current tech stack: Python + Streamlit, Azure CLI, eventual PostgreSQL.
+- Goal: Reduce manual work for Laura/Stef, enable transition to Patty & Robert.
+
+## Agent Behavior Rules
+
+- Before making changes, explore relevant files using tools.
+- Always propose clear terminal commands and file edits.
+- Update the Blueprint Change Log when deploying or completing major items.
+- Keep code clean, well-commented, and production-ready.
+- Prefer Azure-native solutions with good security (Entra ID where possible).
+
+## Style & Quality
+
+- Use Python best practices.
+- Write clear commit messages.
+- Document decisions in the Blueprint when appropriate.
+- Keep Streamlit UI professional and user-friendly.
+
+When in doubt, ask for clarification but lean toward action that advances Phase 2 deployment.

@@ -1,0 +1,66 @@
+# SLAM Services Project .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Azure / Deployment artifacts (keep source only)
+*.log
+deployment_diagnose.log
+logextract/
+*.zip
+__pycache__/
+
+# Data (do NOT commit real client financial data)
+# Uncomment below only if you deliberately want to ship sample CSVs in the repo
+# Data/**/*.csv
+# Data/**/*.xlsx
+
+# Secrets / Local config
+.env
+*.env
+secrets/
+*.pem
+*.key
+
+# Kilo / temporary AI workspaces
+.kilocode/
+.kilo/
+
+# Node (if any future tooling)
+node_modules/
