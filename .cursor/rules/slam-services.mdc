@@ -51,6 +51,14 @@ Keep updates factual, versioned, and focused — no speculative rewrites.
 - Python changes → `ruff check` / `ruff format` on `App` and `Scripts`.
 - Deploy-related changes → confirm zip layout (`requirements.txt`, `App/`, `Data/`, `startup.sh` at root).
 
+## Git practices
+
+- **Commit only when the user explicitly asks** (or the task includes commit/push steps). Otherwise: propose commands, stage lists, and messages — do not commit autonomously.
+- **Security-first**: Respect `.gitignore`. Never stage or commit `Data/`, `**/*.csv`, `**/*.xlsx`, `.env`, secrets, `*.zip`, `*.log`, `*.bak`, `Project-Structure-Report.txt`, or local-only docs (e.g. `Business problem.docx`). Use explicit `git add <paths>` — never `git add .` without review.
+- **When committing** (user-requested): run `git status` and `git diff --cached --stat` before commit; confirm no client/sensitive paths staged. Tie messages to Blueprint version and Phase (e.g. `v2.24: …`). After meaningful pushes, bump Blueprint version + Change Log.
+- **Tracked-but-ignored files**: If a path is in `.gitignore` but still tracked, use `git rm --cached <file>` (keeps local copy) in a focused commit — do not delete the local file.
+- **Post-change checks**: `git status`; `git check-ignore -v` on sensitive paths when `.gitignore` changes; `ruff check App/app.py` when app code changed.
+
 ## Style
 
 - Match existing code style; minimal scope; no over-engineering.

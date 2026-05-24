@@ -1,6 +1,6 @@
 # .kilocode - SLAM Services Project Rules
 
-# Single Source of Truth: SLAM Services - Digital Transformation Blueprint.md (v2.15)
+# Single Source of Truth: SLAM Services - Digital Transformation Blueprint.md (latest version)
 
 You are assisting the SLAM Services Digital Transformation Project. **Cursor** (Composer / Agent / inline edit) is the **primary** AI coding agent for this workspace.
 
@@ -54,8 +54,16 @@ You are assisting the SLAM Services Digital Transformation Project. **Cursor** (
 ## Style & Quality
 
 - Use Python best practices (Ruff + Black per `pyproject.toml`).
-- Write clear commit messages.
+- Write clear, Blueprint-tied commit messages (version + Phase summary).
 - Document decisions in the Blueprint when appropriate.
 - Keep Streamlit UI professional and user-friendly.
+
+## Git practices (shared with `.cursor/rules/slam-services.mdc`)
+
+- **Commit only when the user explicitly requests it** or the task specifies commit/push. Otherwise prepare staging lists and messages only.
+- **Never commit client data or secrets**: `Data/`, spreadsheets, `.env`, credentials, deploy zips/logs, editor backups, or generated reports — see project `.gitignore`.
+- **Conservative staging**: `git add` named paths only; verify with `git status` and `git diff --cached --stat` before commit.
+- **Blueprint alignment**: Reference version in commit subject; update Change Log after significant git milestones (e.g. `.gitignore` hardening, untracking large reports).
+- **Hygiene**: Use `git rm --cached` for files that should be ignored but remain tracked; run `git check-ignore -v` when validating ignore rules.
 
 When in doubt, ask for clarification but lean toward action that advances Phase 2 deployment.
