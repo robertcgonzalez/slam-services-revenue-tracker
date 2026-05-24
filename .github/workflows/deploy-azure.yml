@@ -9,7 +9,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: slam-services-revenue-tracker
-  AZURE_WEBAPP_PACKAGE_PATH: '.'
+  AZURE_WEBAPP_PACKAGE_PATH: deploy-package
 
 jobs:
   build-and-deploy:
@@ -39,6 +39,16 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Build deployment package (flat root, preserve Data on server)
+        run: |
+          mkdir -p deploy-package
+          cp requirements.txt runtime.txt startup.sh pyproject.toml deploy-package/
+          cp -r App Scripts deploy-package/
+          # Data/ is gitignored — not in CI checkout. Use manual zip or Kudu for CSV upload.
+          # clean:false below preserves existing Data/ on App Service between code deploys.
+          echo "Package contents:"
+          find deploy-package -maxdepth 2 -type f | head -40
+
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
@@ -47,6 +57,19 @@ jobs:
           slot-name: production
           publish-profile: ${{ secrets.AZUREAPPSERVICEPUBLISHPROFILE }}
           package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+          clean: false
+
+      - name: Post-deploy smoke check
+        run: |
+          URL="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"
+          echo "Waiting 45s for cold start..."
+          sleep 45
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || true)
+          echo "HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "302" ]; then
+            echo "::warning::Site returned HTTP $HTTP_CODE — verify startup logs and Data/ on Kudu."
+          fi
+          echo "Manual check: log in and confirm dashboard loads (not CSV path error)."
 
       - name: Log deployment URL
         run: echo "Deployed to https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"

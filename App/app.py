@@ -5,8 +5,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from data_paths import render_data_path_error, resolve_data_path
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
+
+# --- Data source mode (Phase 3 dual mode) ---
+USE_POSTGRES = os.environ.get("USE_POSTGRES", "").strip().lower() in ("1", "true", "yes")
+DATA_SOURCE = "postgresql" if USE_POSTGRES else "csv"
 
 # --- Auth (unchanged contract) ---
 HAS_CUSTOM_PASSWORD = "SLAM_APP_PASSWORD" in os.environ
@@ -36,129 +41,219 @@ if not st.session_state.authenticated:
     st.stop()
 
 
-# --- Data path resolution (unchanged robust logic) ---
-def resolve_data_path():
-    possible = [
-        Path(__file__).parent.parent / "Data" / "Revenue_Tracker_Migration",
-        Path("/home/site/wwwroot/Data/Revenue_Tracker_Migration"),
-        Path("Data/Revenue_Tracker_Migration"),
-        Path("../Data/Revenue_Tracker_Migration"),
-    ]
-    for p in possible:
-        if p.exists() and (p / "Clients.csv").exists() and (p / "RevenueRequests.csv").exists():
-            return p
-    return None
+# --- Data path resolution (CSV fallback) ---
+DATA_PATH: Path | None = None
+DATA_PATH_LOGS: list[str] = []
 
 
-DATA_PATH = resolve_data_path()
-if DATA_PATH is None:
-    st.error("❌ Critical: Could not locate Clients.csv / RevenueRequests.csv in expected paths.")
-    st.stop()
+def _init_csv_data_path() -> None:
+    global DATA_PATH, DATA_PATH_LOGS
+    DATA_PATH, DATA_PATH_LOGS = resolve_data_path()
+
+
+if not USE_POSTGRES:
+    _init_csv_data_path()
+    if DATA_PATH is None:
+        st.error(f"❌ Critical: {render_data_path_error(DATA_PATH_LOGS)}")
+        with st.expander("Debug: path resolution log"):
+            st.code("\n".join(DATA_PATH_LOGS))
+        st.stop()
+else:
+    try:
+        from db_utils import test_connection
+
+        ok, msg = test_connection()
+        if not ok:
+            st.warning(f"⚠️ PostgreSQL unavailable ({msg}). Falling back to CSV.")
+            USE_POSTGRES = False
+            DATA_SOURCE = "csv"
+            _init_csv_data_path()
+            if DATA_PATH is None:
+                st.error(f"❌ Critical: PostgreSQL failed and CSV fallback missing.\n{msg}")
+                st.stop()
+        else:
+            st.sidebar.caption("🗄️ Data source: PostgreSQL")
+            if DATA_PATH is None:
+                resolved, _ = resolve_data_path()
+                if resolved is not None:
+                    DATA_PATH = resolved
+    except ImportError as exc:
+        st.warning(f"⚠️ db_utils not available ({exc}). Falling back to CSV.")
+        USE_POSTGRES = False
+        DATA_SOURCE = "csv"
+        _init_csv_data_path()
+        if DATA_PATH is None:
+            st.error("❌ Critical: Could not load database utilities or CSV data.")
+            st.stop()
 
 
 # --- Data loading helpers (cached) ---
-@st.cache_data(ttl=60)
-def load_clients():
+def _load_clients_csv() -> pd.DataFrame:
+    if DATA_PATH is None:
+        return pd.DataFrame()
     try:
         p = DATA_PATH / "Clients.csv"
-        if p.exists():
-            df = pd.read_csv(p)
-            # clean header offsets + filter junk rows
-            if "Business Name" not in df.columns:
-                df.columns = [c.strip() for c in df.iloc[0]]
-                df = df.iloc[1:]
-            df = df[df["Business Name"].notna() & (df["Business Name"].str.strip() != "")]
-            df = df.reset_index(drop=True)
+        if not p.exists():
+            return pd.DataFrame()
+        df = pd.read_csv(p)
+        if "Business Name" not in df.columns:
+            df.columns = [c.strip() for c in df.iloc[0]]
+            df = df.iloc[1:]
+        df = df[df["Business Name"].notna() & (df["Business Name"].str.strip() != "")]
+        df = df.reset_index(drop=True)
 
-            # Industry category (simple rule-based)
-            def cat(name):
-                n = str(name).upper()
-                if any(
-                    x in n
-                    for x in [
-                        "GRILL",
-                        "CANTINA",
-                        "RESTAURANT",
-                        "TACOS",
-                        "MEX",
-                        "BAR",
-                        "TAQUERIA",
-                        "FIESTA",
-                    ]
-                ):
-                    return "Restaurant/Bar"
-                if any(
-                    x in n
-                    for x in [
-                        "CONCRETE",
-                        "ROOF",
-                        "BUILDER",
-                        "MASON",
-                        "PAINT",
-                        "REMODEL",
-                        "PLUMB",
-                        "CONTRACT",
-                        "DRY",
-                    ]
-                ):
-                    return "Construction/Trades"
-                return "Other"
+        def cat(name):
+            n = str(name).upper()
+            if any(
+                x in n
+                for x in [
+                    "GRILL",
+                    "CANTINA",
+                    "RESTAURANT",
+                    "TACOS",
+                    "MEX",
+                    "BAR",
+                    "TAQUERIA",
+                    "FIESTA",
+                ]
+            ):
+                return "Restaurant/Bar"
+            if any(
+                x in n
+                for x in [
+                    "CONCRETE",
+                    "ROOF",
+                    "BUILDER",
+                    "MASON",
+                    "PAINT",
+                    "REMODEL",
+                    "PLUMB",
+                    "CONTRACT",
+                    "DRY",
+                ]
+            ):
+                return "Construction/Trades"
+            return "Other"
 
-            df["industry_category"] = df["Business Name"].apply(cat)
-            for col in ["EIN", "Entity Type", "City State Zip"]:
-                if col not in df.columns:
-                    df[col] = ""
-            # Reduce blanks/None values defensively for cleaner display
-            for col in ["EIN", "Entity Type", "City State Zip"]:
-                df[col] = df[col].fillna("").astype(str).replace({"nan": "", "None": ""})
-            return df[
-                ["Business Name", "EIN", "Entity Type", "City State Zip", "industry_category"]
-            ]
+        df["industry_category"] = df["Business Name"].apply(cat)
+        for col in ["EIN", "Entity Type", "City State Zip"]:
+            if col not in df.columns:
+                df[col] = ""
+        for col in ["EIN", "Entity Type", "City State Zip"]:
+            df[col] = df[col].fillna("").astype(str).replace({"nan": "", "None": ""})
+        return df[["Business Name", "EIN", "Entity Type", "City State Zip", "industry_category"]]
     except Exception:
-        pass
-    return pd.DataFrame()
+        return pd.DataFrame()
+
+
+def _load_clients_db() -> pd.DataFrame:
+    from db_utils import Client, get_session
+
+    with get_session() as session:
+        rows = session.query(Client).filter(Client.is_deleted.is_(False)).all()
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        [
+            {
+                "Business Name": r.business_name,
+                "EIN": r.ein or "",
+                "Entity Type": r.entity_type or "",
+                "City State Zip": r.address or "",
+                "industry_category": r.industry_type or "Other",
+            }
+            for r in rows
+        ]
+    )
+
+
+@st.cache_data(ttl=60)
+def load_clients():
+    if USE_POSTGRES:
+        return _load_clients_db()
+    return _load_clients_csv()
+
+
+def _load_requests_csv() -> pd.DataFrame:
+    if DATA_PATH is None:
+        return pd.DataFrame()
+    try:
+        p = DATA_PATH / "RevenueRequests.csv"
+        if not p.exists():
+            return pd.DataFrame()
+        df = pd.read_csv(p)
+        required = [
+            "request_id",
+            "business_name",
+            "request_type",
+            "period",
+            "status",
+            "amount_due",
+            "due_date",
+            "received_date",
+            "notes",
+            "bank_statement_received",
+            "sales_report_received",
+        ]
+        for c in required:
+            if c not in df.columns:
+                df[c] = ""
+        df["amount_due"] = pd.to_numeric(df["amount_due"], errors="coerce").fillna(0)
+        for col in ["bank_statement_received", "sales_report_received"]:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .isin(["yes", "y", "true", "1", "✔", "✓"])
+            )
+            df[col] = df[col].fillna(False).astype(bool)
+        if "request_id" in df.columns:
+            df["request_id"] = df["request_id"].astype(str)
+        if "business_name" in df.columns:
+            df["business_name"] = df["business_name"].fillna("").astype(str)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_requests_db() -> pd.DataFrame:
+    from db_utils import Client, RevenueRequest, get_session
+
+    with get_session() as session:
+        rows = (
+            session.query(RevenueRequest, Client.business_name)
+            .join(Client, RevenueRequest.client_id == Client.client_id)
+            .filter(RevenueRequest.is_deleted.is_(False))
+            .all()
+        )
+    if not rows:
+        return pd.DataFrame()
+    records = []
+    for req, business_name in rows:
+        records.append(
+            {
+                "request_id": str(req.request_id),
+                "business_name": business_name or "",
+                "request_type": req.request_type or "",
+                "period": req.period or "",
+                "status": req.status or "Pending",
+                "amount_due": float(req.amount_due or 0),
+                "due_date": req.due_date.isoformat() if req.due_date else "",
+                "received_date": req.received_date.isoformat() if req.received_date else "",
+                "notes": req.notes or "",
+                "bank_statement_received": bool(req.bank_statement_received),
+                "sales_report_received": bool(req.sales_report_received),
+            }
+        )
+    return pd.DataFrame(records)
 
 
 @st.cache_data(ttl=60)
 def load_requests():
-    try:
-        p = DATA_PATH / "RevenueRequests.csv"
-        if p.exists():
-            df = pd.read_csv(p)
-            required = [
-                "request_id",
-                "business_name",
-                "request_type",
-                "period",
-                "status",
-                "amount_due",
-                "due_date",
-                "received_date",
-                "notes",
-                "bank_statement_received",
-                "sales_report_received",
-            ]
-            for c in required:
-                if c not in df.columns:
-                    df[c] = ""
-            df["amount_due"] = pd.to_numeric(df["amount_due"], errors="coerce").fillna(0)
-            for col in ["bank_statement_received", "sales_report_received"]:
-                df[col] = (
-                    df[col]
-                    .astype(str)
-                    .str.strip()
-                    .str.lower()
-                    .isin(["yes", "y", "true", "1", "✔", "✓"])
-                )
-                df[col] = df[col].fillna(False).astype(bool)
-            if "request_id" in df.columns:
-                df["request_id"] = df["request_id"].astype(str)
-            if "business_name" in df.columns:
-                df["business_name"] = df["business_name"].fillna("").astype(str)
-            return df
-    except Exception:
-        pass
-    return pd.DataFrame()
+    if USE_POSTGRES:
+        return _load_requests_db()
+    return _load_requests_csv()
 
 
 def format_request_id(rid) -> str:
@@ -251,9 +346,33 @@ def apply_filters(req_df, clients_df, f):
     return df.drop(columns=["due_date_parsed"], errors="ignore")
 
 
-# --- Persist helper (CSV) ---
-def save_requests(df, path=DATA_PATH / "RevenueRequests.csv"):
-    df.to_csv(path, index=False)
+# --- Persist helper (CSV; PostgreSQL write-back is Phase 3 follow-up) ---
+def _requests_csv_path() -> Path:
+    if DATA_PATH is None:
+        raise RuntimeError(
+            "CSV path unavailable. Deploy Data/Revenue_Tracker_Migration or enable PostgreSQL writes."
+        )
+    return DATA_PATH / "RevenueRequests.csv"
+
+
+def save_requests(df, path: Path | None = None):
+    if USE_POSTGRES:
+        raise RuntimeError(
+            "PostgreSQL write-back not enabled yet — save remains CSV-only during transition."
+        )
+    target = path or _requests_csv_path()
+    df.to_csv(target, index=False)
+
+
+def _feedback_log_path() -> Path:
+    if DATA_PATH is not None:
+        return DATA_PATH / "feedback_log.csv"
+    resolved, _ = resolve_data_path()
+    if resolved is not None:
+        return resolved / "feedback_log.csv"
+    fallback = Path("/home/site/wwwroot/Data/Revenue_Tracker_Migration")
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback / "feedback_log.csv"
 
 
 # --- Dashboard page enhancements (dynamic KPIs, overdue alerts) ---
@@ -583,7 +702,7 @@ def main():
             )
             if st.form_submit_button("Submit Feedback to Log"):
                 if description.strip():
-                    log_path = DATA_PATH / "feedback_log.csv"
+                    log_path = _feedback_log_path()
                     import csv as _csv
                     from datetime import datetime as _dt
 
@@ -594,7 +713,7 @@ def main():
                         description.strip().replace("\n", " "),
                         priority,
                         "Open",
-                        "v2.25",
+                        "v2.26",
                     ]
                     with open(log_path, "a", encoding="utf-8", newline="") as f:
                         _csv.writer(f).writerow(row)

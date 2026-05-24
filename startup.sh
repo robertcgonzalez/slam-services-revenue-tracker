@@ -4,6 +4,19 @@ set -e
 echo "=== SLAM Services Startup Script ==="
 cd /home/site/wwwroot
 
+echo "Working directory: $(pwd)"
+echo "Python: $(python --version 2>&1)"
+
+DATA_DIR="Data/Revenue_Tracker_Migration"
+if [ -d "$DATA_DIR" ]; then
+  echo "Data folder found: $DATA_DIR"
+  ls -la "$DATA_DIR" | head -20
+else
+  echo "WARNING: $DATA_DIR not found — app will show CSV path error unless USE_POSTGRES=true."
+  echo "Top-level wwwroot contents:"
+  ls -la | head -30
+fi
+
 echo "Upgrading pip..."
 python -m pip install --upgrade pip --disable-pip-version-check -q
 
