@@ -1,14 +1,58 @@
-# SLAM Services Project .gitignore
+# SLAM Services — Security-First .gitignore
 
-# Python
+# ==================== Client Data & Sensitive Files ====================
+Data/
+**/*.csv
+**/*.xlsx
+**/*.xls
+feedback_log.csv
+*.env
+.secrets/
+secrets/
+*.pem
+*.key
+*.pfx
+*.p12
+
+# ==================== Secrets & Credentials ====================
+# Never commit passwords, API keys, tokens, or config with secrets
+SLAM_APP_PASSWORD
+.secret
+config.json
+credentials*.*
+*.log
+deployment_diagnose.log
+logextract/
+
+# ==================== Generated / Large / Report Files ====================
+# Large or auto-generated reports (do not commit to keep repo clean)
+Project-Structure-Report.txt
+*.report.txt
+*structure-report*
+*-report.txt
+*.large.*
+*.backup.*
+
+# ==================== Development Artifacts ====================
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
+*.pyo
+*.pyd
 .Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Build & Deploy
+*.zip
+*.tar.gz
+dist/
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -21,62 +65,38 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.so
+startup.sh.bak
 
-# Virtual environments
-.venv/
-venv/
-ENV/
-env/
-
-# IDE / Editor
+# IDE & Tooling temp
 .idea/
+.vscode/.history/
+.vscode/*.code-workspace
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+.kilo/
+.kilocode/
+.continue/
+*.bak
 *.swp
 *.swo
 *~
+.DS_Store
+Thumbs.db
 
-# Allow sharing of key VS Code / Cursor workspace configs
+# Node (future tooling)
+node_modules/
+
+# ==================== Allowed (explicitly not ignored) ====================
+# .vscode/ workspace configs are intentionally committed (shared team settings)
+!.vscode/
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
 !.vscode/*.md
+
+# Cursor rules (committed; rest of .cursor/ ignored above)
 !.cursor/rules/
 !.cursor/rules/**
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Azure / Deployment artifacts (keep source only)
-*.log
-deployment_diagnose.log
-logextract/
-*.zip
-__pycache__/
-
-# Client financial / PII data – NEVER commit to any repo
-**/*.csv
-**/*.xlsx
-**/*.xls
-Data/
-Data/**
-
-# Secrets / Local config
-.env
-*.env
-secrets/
-*.pem
-*.key
-
-# Kilo / temporary AI workspaces
-.kilocode/
-.kilo/
-
-# Continue.dev (unused — Cursor + Kilo Code only)
-.continue/
-
-# Node (if any future tooling)
-node_modules/
-
-# Local editor backups
-*.bak
