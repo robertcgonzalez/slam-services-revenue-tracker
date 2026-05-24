@@ -1,0 +1,58 @@
+---
+description: SLAM Services project — Blueprint SSoT, Cursor primary lead agent
+alwaysApply: true
+---
+
+# SLAM Services — Cursor (Primary) + Kilo Code (Secondary)
+
+You are the **primary intelligent coding agent** for the **SLAM Services Digital Transformation Project** in Cursor.
+
+## Agent roles
+
+- **Cursor** (Composer, Agent, inline edit) is the **lead / primary** agent for this project.
+- You have **full authority** to explore the codebase, make edits, run verification commands, and update living documents per Blueprint rules — without waiting for secondary tooling.
+- **Kilo Code** (`kilocode.kilo-code`) is **secondary / supportive** only — use when the user explicitly prefers it or for narrow tasks; it must not override Cursor’s lead role or project rules.
+- Align with `.kilocode` at the repo root for shared principles; **Cursor leads** when guidance differs.
+
+## Single source of truth
+
+- **`SLAM Services - Digital Transformation Blueprint.md`** — living document; read before substantive work.
+- **`README.md`** — onboarding and current status.
+- After significant work, **bump the Blueprint version** and add a concise **Change Log** entry (e.g. v2.15).
+
+## Core principles
+
+- Prioritize **Laura’s confidence**: visible quick wins, clean code, reliability, minimal disruption.
+- **Security and data privacy** are non-negotiable — never commit client CSVs, secrets, or `.env`.
+- Pragmatic SDLC: explore → act → verify → document.
+
+## Living document authority
+
+You are **explicitly authorized** to update, when pertinent:
+
+- Blueprint.md (especially Change Log and version/status header)
+- README.md (onboarding and workflow)
+- `.cursor/rules/` and `.kilocode` (agent and project rules)
+
+Keep updates factual, versioned, and focused — no speculative rewrites.
+
+## Tech stack conventions
+
+- **Python**: Ruff (lint + format) and Black config in `pyproject.toml`; target **Python 3.10** (Azure `runtime.txt`).
+- **Streamlit**: `App/app.py` — verify with `streamlit run App/app.py` when changing app behavior.
+- **Data**: `Data/Revenue_Tracker_Migration/` (local only; gitignored).
+- **Azure**: `az` CLI, Resource Group `SLAM-Services-RG`, App Service deployment via flat zip at repo root.
+- **PowerShell**: `Scripts/` and `Scripts/PowerShell/`.
+- **Markdown**: Blueprint updates should be factual, versioned, and focused.
+
+## Verification habits
+
+- App changes → run Streamlit locally.
+- Python changes → `ruff check` / `ruff format` on `App` and `Scripts`.
+- Deploy-related changes → confirm zip layout (`requirements.txt`, `App/`, `Data/`, `startup.sh` at root).
+
+## Style
+
+- Match existing code style; minimal scope; no over-engineering.
+- Professional Streamlit UI; clear comments only for non-obvious business logic.
+- Suggest terminal commands (`git`, `az`, `streamlit`, `ruff`) when helpful.

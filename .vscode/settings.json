@@ -1,0 +1,102 @@
+{
+  // Python: Ruff lint + format (Black-compatible via pyproject.toml)
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "ruff.enable": true,
+  "ruff.organizeImports": true,
+  "ruff.fixAll": true,
+  "ruff.lineLength": 100,
+  "black-formatter.showNotifications": "off",
+
+  // Python 3.10 — matches Azure runtime.txt (python-3.10)
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.extraPaths": ["${workspaceFolder}", "${workspaceFolder}/App"],
+  "python.terminal.activateEnvironment": true,
+  "python.envFile": "${workspaceFolder}/.env",
+
+  // Streamlit / data work
+  "files.associations": {
+    "*.csv": "csv",
+    "runtime.txt": "plaintext"
+  },
+  "rainbow-csv.enableSeparatorAutodetection": true,
+  "rainbow-csv.enableAutoCsvLint": true,
+
+  // Markdown (Blueprint.md living document)
+  "[markdown]": {
+    "editor.wordWrap": "on",
+    "editor.quickSuggestions": {
+      "comments": "off",
+      "strings": "off",
+      "other": "off"
+    },
+    "editor.formatOnSave": false
+  },
+  "markdown.preview.breaks": true,
+  "markdownlint.config": {
+    "MD013": false,
+    "MD033": false,
+    "MD041": false
+  },
+
+  // PowerShell
+  "[powershell]": {
+    "editor.defaultFormatter": "ms-vscode.powershell",
+    "files.insertFinalNewline": true
+  },
+  "powershell.scriptAnalysis.enable": true,
+  "powershell.codeFormatting.preset": "OTBS",
+  "powershell.integratedConsole.showOnStartup": false,
+
+  // Performance: large CSVs, zips, logs, AI temp dirs
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/.kilo/**": true,
+    "**/.kilocode/**": true,
+    "**/.ruff_cache/**": true,
+    "**/__pycache__/**": true,
+    "**/node_modules/**": true,
+    "**/*.zip": true,
+    "**/logextract/**": true,
+    "**/.venv/**": true
+  },
+  "search.exclude": {
+    "**/.kilo": true,
+    "**/.ruff_cache": true,
+    "**/node_modules": true,
+    "**/*.zip": true,
+    "**/logextract": true,
+    "**/.venv": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.ruff_cache": true
+  },
+
+  // Editor UX
+  "editor.formatOnSave": true,
+  "editor.rulers": [100],
+  "editor.tabSize": 4,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.eol": "\n",
+  "errorLens.enabled": true,
+  "todo-tree.general.tags": ["TODO", "FIXME", "P0", "P1", "P2"],
+
+  // Terminal (PowerShell 7 — matches user profile)
+  "terminal.integrated.defaultProfile.windows": "PowerShell 7",
+
+  // Kilo Code remains primary agent; Cursor AI complements (no conflicts)
+  "kilo-code.new.showTaskTimeline": true,
+
+  // Azure
+  "azureResourceGroups.showTags": true
+}

@@ -1,17 +1,24 @@
-import streamlit as st
-import pandas as pd
-from pathlib import Path
+import io
 import os
+from datetime import datetime
+from pathlib import Path
 
-st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide")
+import pandas as pd
+import streamlit as st
 
-# Secure password from Azure App Setting (fallback for local dev)
+st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
+
+# --- Auth (unchanged contract) ---
+HAS_CUSTOM_PASSWORD = "SLAM_APP_PASSWORD" in os.environ
 APP_PASSWORD = os.environ.get("SLAM_APP_PASSWORD", "SLAM2026")
-if APP_PASSWORD == "SLAM2026":
-    st.warning("⚠️ Using default password. Set SLAM_APP_PASSWORD App Setting in Azure for production security.")
+if not HAS_CUSTOM_PASSWORD:
+    st.warning(
+        "⚠️ Using default password. Set SLAM_APP_PASSWORD App Setting in Azure for production security."
+    )
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+
 
 def login():
     st.title("🔐 SLAM Services Login")
@@ -23,72 +30,588 @@ def login():
         else:
             st.error("Incorrect password")
 
+
 if not st.session_state.authenticated:
     login()
     st.stop()
 
-# Main App
-st.title("📊 SLAM Services Revenue Reporting Tracker")
 
-# Robust data path resolution — works in both local dev and Azure App Service
-# Tries multiple common locations so it survives different working directories
-possible_paths = [
-    Path(__file__).parent.parent / "Data" / "Revenue_Tracker_Migration",  # repo root /Data
-    Path("/home/site/wwwroot/Data/Revenue_Tracker_Migration"),            # Azure typical
-    Path("Data/Revenue_Tracker_Migration"),                               # cwd relative
-    Path("../Data/Revenue_Tracker_Migration"),
-]
+# --- Data path resolution (unchanged robust logic) ---
+def resolve_data_path():
+    possible = [
+        Path(__file__).parent.parent / "Data" / "Revenue_Tracker_Migration",
+        Path("/home/site/wwwroot/Data/Revenue_Tracker_Migration"),
+        Path("Data/Revenue_Tracker_Migration"),
+        Path("../Data/Revenue_Tracker_Migration"),
+    ]
+    for p in possible:
+        if p.exists() and (p / "Clients.csv").exists() and (p / "RevenueRequests.csv").exists():
+            return p
+    return None
 
-data_path = None
-for p in possible_paths:
-    if p.exists() and (p / "Clients.csv").exists():
-        data_path = p
-        break
 
-if data_path is None:
-    st.error("❌ Critical: Could not locate RevenueRequests.csv or Clients.csv in any expected path.")
-    st.info("Paths tried: " + ", ".join(str(p) for p in possible_paths))
+DATA_PATH = resolve_data_path()
+if DATA_PATH is None:
+    st.error("❌ Critical: Could not locate Clients.csv / RevenueRequests.csv in expected paths.")
     st.stop()
 
-# Load data safely
-clients_df = pd.read_csv(data_path / "Clients.csv") if (data_path / "Clients.csv").exists() else pd.DataFrame()
-requests_df = pd.read_csv(data_path / "RevenueRequests.csv") if (data_path / "RevenueRequests.csv").exists() else pd.DataFrame()
 
-if clients_df.empty and requests_df.empty:
-    st.warning("Data files found but empty. Upload production CSVs to the Data folder and redeploy.")
+# --- Data loading helpers (cached) ---
+@st.cache_data(ttl=60)
+def load_clients():
+    try:
+        p = DATA_PATH / "Clients.csv"
+        if p.exists():
+            df = pd.read_csv(p)
+            # clean header offsets + filter junk rows
+            if "Business Name" not in df.columns:
+                df.columns = [c.strip() for c in df.iloc[0]]
+                df = df.iloc[1:]
+            df = df[df["Business Name"].notna() & (df["Business Name"].str.strip() != "")]
+            df = df.reset_index(drop=True)
 
-# Sidebar
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Dashboard", "Clients", "Revenue Requests"])
+            # Industry category (simple rule-based)
+            def cat(name):
+                n = str(name).upper()
+                if any(
+                    x in n
+                    for x in [
+                        "GRILL",
+                        "CANTINA",
+                        "RESTAURANT",
+                        "TACOS",
+                        "MEX",
+                        "BAR",
+                        "TAQUERIA",
+                        "FIESTA",
+                    ]
+                ):
+                    return "Restaurant/Bar"
+                if any(
+                    x in n
+                    for x in [
+                        "CONCRETE",
+                        "ROOF",
+                        "BUILDER",
+                        "MASON",
+                        "PAINT",
+                        "REMODEL",
+                        "PLUMB",
+                        "CONTRACT",
+                        "DRY",
+                    ]
+                ):
+                    return "Construction/Trades"
+                return "Other"
 
-if page == "Dashboard":
-    st.header("📈 Overview")
-    col1, col2, col3 = st.columns(3)
+            df["industry_category"] = df["Business Name"].apply(cat)
+            for col in ["EIN", "Entity Type", "City State Zip"]:
+                if col not in df.columns:
+                    df[col] = ""
+            # Reduce blanks/None values defensively for cleaner display
+            for col in ["EIN", "Entity Type", "City State Zip"]:
+                df[col] = df[col].fillna("").astype(str).replace({"nan": "", "None": ""})
+            return df[
+                ["Business Name", "EIN", "Entity Type", "City State Zip", "industry_category"]
+            ]
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def load_requests():
+    try:
+        p = DATA_PATH / "RevenueRequests.csv"
+        if p.exists():
+            df = pd.read_csv(p)
+            required = [
+                "request_id",
+                "business_name",
+                "request_type",
+                "period",
+                "status",
+                "amount_due",
+                "due_date",
+                "received_date",
+                "notes",
+                "bank_statement_received",
+                "sales_report_received",
+            ]
+            for c in required:
+                if c not in df.columns:
+                    df[c] = ""
+            df["amount_due"] = pd.to_numeric(df["amount_due"], errors="coerce").fillna(0)
+            for col in ["bank_statement_received", "sales_report_received"]:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .isin(["yes", "y", "true", "1", "✔", "✓"])
+                )
+                df[col] = df[col].fillna(False).astype(bool)
+            if "request_id" in df.columns:
+                df["request_id"] = df["request_id"].astype(str)
+            if "business_name" in df.columns:
+                df["business_name"] = df["business_name"].fillna("").astype(str)
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+# --- Global filters in sidebar (propagate across pages) ---
+def render_global_filters(req_df):
+    st.sidebar.title("🔎 Global Filters")
+    # Date range
+    min_d = pd.to_datetime(req_df["due_date"], errors="coerce").min()
+    max_d = pd.to_datetime(req_df["due_date"], errors="coerce").max()
+    if pd.isna(min_d):
+        min_d = datetime(2025, 10, 1)
+    if pd.isna(max_d):
+        max_d = datetime(2026, 6, 10)
+    date_range = st.sidebar.date_input(
+        "Due date range",
+        value=(min_d.date(), max_d.date()),
+        min_value=min_d.date(),
+        max_value=max_d.date(),
+    )
+
+    # Status multi-select
+    all_status = ["Pending", "Received", "Invoiced", "Paid"]
+    sel_status = st.sidebar.multiselect("Status", all_status, default=all_status)
+
+    base_types = req_df["request_type"].dropna().unique().tolist() if len(req_df) else []
+    extra_types = ["Payroll", "Tax prep"]
+    all_types = sorted(set(base_types) | set(extra_types))
+    sel_type = st.sidebar.multiselect("Request Type", all_types, default=all_types)
+
+    # Industry segments
+    all_ind = ["All", "Restaurant/Bar", "Construction/Trades", "Other"]
+    sel_ind = st.sidebar.selectbox("Industry Segment", all_ind, index=0)
+
+    if st.sidebar.button("Reset Filters", key="btn_reset_filters"):
+        for k in list(st.session_state.keys()):
+            if k.startswith(("filter_", "revenue_editor", "last_filter_industry", "widget_")):
+                try:
+                    del st.session_state[k]
+                except Exception:
+                    pass
+        st.cache_data.clear()
+        st.rerun()
+
+    return {
+        "date_range": date_range,
+        "status": sel_status,
+        "request_type": sel_type,
+        "industry": sel_ind,
+    }
+
+
+def apply_filters(req_df, clients_df, f):
+    df = req_df.copy()
+    # Date filter
+    if len(f["date_range"]) == 2:
+        lo, hi = pd.to_datetime(f["date_range"][0]), pd.to_datetime(f["date_range"][1])
+        df["due_date_parsed"] = pd.to_datetime(df["due_date"], errors="coerce")
+        df = df[(df["due_date_parsed"] >= lo) & (df["due_date_parsed"] <= hi)]
+
+    # Status
+    if f["status"]:
+        df = df[df["status"].isin(f["status"])]
+
+    # Type
+    if f["request_type"]:
+        df = df[df["request_type"].isin(f["request_type"])]
+
+    # Industry join + filter
+    if f["industry"] != "All":
+        matched_clients = clients_df[clients_df["industry_category"] == f["industry"]][
+            "Business Name"
+        ].tolist()
+        df = df[df["business_name"].isin(matched_clients)]
+
+    # Add overdue flag
+    df["overdue"] = (df["status"].isin(["Pending", "Received"])) & (
+        pd.to_datetime(df["due_date"], errors="coerce") < datetime.now()
+    )
+    return df.drop(columns=["due_date_parsed"], errors="ignore")
+
+
+# --- Persist helper (CSV) ---
+def save_requests(df, path=DATA_PATH / "RevenueRequests.csv"):
+    df.to_csv(path, index=False)
+
+
+# --- Dashboard page enhancements (dynamic KPIs, overdue alerts) ---
+def dashboard_page(clients_df, req_df, filtered):
+    st.header("📈 SLAM Services Revenue Overview")
+
+    total_clients = len(clients_df)
+    total_pending_amt = filtered[filtered["status"].isin(["Pending", "Received", "Invoiced"])][
+        "amount_due"
+    ].sum()
+    overdue_cnt = filtered["overdue"].sum() if "overdue" in filtered.columns else 0
+    completion_pct = round(
+        100 * len(filtered[filtered["status"] == "Paid"]) / max(1, len(filtered)), 1
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Clients", total_clients)
+    c2.metric("Pending Amount", f"${total_pending_amt:,.0f}")
+    c3.metric("Overdue Items", overdue_cnt)
+    c4.metric("Paid Rate", f"{completion_pct}%")
+
+    st.subheader("Status Breakdown")
+    status_counts = filtered["status"].value_counts().reset_index()
+    status_counts.columns = ["status", "count"]
+    st.bar_chart(status_counts, x="status", y="count")
+
+    st.subheader("Overdue Requests (Action Required)")
+    overdue = filtered[filtered.get("overdue", False)]
+    if not overdue.empty:
+        # P0 final polish (v2.11): hide implicit pandas index so no spurious blank first column appears
+        st.dataframe(
+            overdue[
+                [
+                    "request_id",
+                    "business_name",
+                    "request_type",
+                    "period",
+                    "amount_due",
+                    "due_date",
+                    "notes",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.success("No overdue items in current filter.")
+
+    st.subheader("Recent Activity (last 10 records)")
+    recent = filtered.sort_values("due_date", ascending=False).head(10)
+    st.dataframe(
+        recent[["business_name", "request_type", "period", "status", "amount_due", "due_date"]],
+        width="stretch",
+        hide_index=True,
+    )
+
+
+# --- Clients page with revenue aggregates + enriched info ---
+def clients_page(clients_df, req_df, filtered):
+    st.header("👥 Client Roster & Revenue Status")
+
+    search = st.text_input("Search clients", "")
+    dfc = clients_df.copy()
+    if search:
+        dfc = dfc[dfc["Business Name"].str.contains(search, case=False, na=False)]
+
+    # Aggregate revenue info per client
+    agg = (
+        req_df.groupby("business_name")
+        .agg(
+            outstanding_amt=(
+                "amount_due",
+                lambda x: x[
+                    req_df.loc[x.index, "status"].isin(["Pending", "Received", "Invoiced"])
+                ].sum(),
+            ),
+            total_requests=("request_id", "count"),
+            last_status=("status", lambda s: s.iloc[-1] if len(s) else ""),
+        )
+        .reset_index()
+    )
+    agg.columns = ["Business Name", "Outstanding Amount", "Total Requests", "Most Recent Status"]
+
+    merged = dfc.merge(agg, on="Business Name", how="left")
+    merged = merged.fillna({"Outstanding Amount": 0, "Total Requests": 0, "Most Recent Status": ""})
+
+    # Apply global industry filter if active
+    if "industry_category" in merged:
+        if st.session_state.get("last_filter_industry") not in [None, "All"]:
+            merged = merged[merged["industry_category"] == st.session_state["last_filter_industry"]]
+
+    st.dataframe(
+        merged[
+            [
+                "Business Name",
+                "EIN",
+                "Entity Type",
+                "City State Zip",
+                "industry_category",
+                "Outstanding Amount",
+                "Total Requests",
+                "Most Recent Status",
+            ]
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    if st.button("Export Filtered Clients CSV"):
+        csv_buf = io.StringIO()
+        merged.to_csv(csv_buf, index=False)
+        st.download_button(
+            "Download clients_export.csv",
+            csv_buf.getvalue(),
+            file_name=f"clients_enriched_{datetime.now().strftime('%Y%m%d')}.csv",
+        )
+
+
+# --- Revenue Requests page: advanced filtering, editable table, bulk + save ---
+def requests_page(req_df, clients_df, filtered_global):
+    st.header("💰 Revenue Requests — Live Editor")
+
+    # Additional client-side search on top of global filters
+    search_term = st.text_input("Search client name or notes", "")
+    df = filtered_global.copy()
+    if search_term:
+        mask = df["business_name"].str.contains(search_term, case=False, na=False) | df[
+            "notes"
+        ].astype(str).str.contains(search_term, case=False, na=False)
+        df = df[mask]
+
+    st.caption(f"Showing {len(df)} of {len(req_df)} total requests under current filters.")
+
+    if df.empty:
+        st.info("No matching rows after filtering.")
+        return
+
+    # Minimal defensive undo stack init (v2.14 P2 quick-win)
+    if "undo_stack" not in st.session_state or not isinstance(
+        st.session_state.get("undo_stack"), list
+    ):
+        st.session_state.undo_stack = []
+
+    # Editable version — P0 FIX v2.11
+    # Explicitly include the two service flag columns and render them as boolean checkboxes
+    # so the right-most columns the user mentioned are now visible and editable (Yes/No).
+    edited = st.data_editor(
+        df[
+            [
+                "request_id",
+                "business_name",
+                "request_type",
+                "period",
+                "status",
+                "amount_due",
+                "due_date",
+                "received_date",
+                "notes",
+                "bank_statement_received",
+                "sales_report_received",
+            ]
+        ],
+        num_rows="fixed",
+        width="stretch",
+        key="revenue_editor",
+        hide_index=True,  # Eliminates the useless "first column" complaint
+        column_config={
+            "status": st.column_config.SelectboxColumn(
+                "status", options=["Pending", "Received", "Invoiced", "Paid"], required=True
+            ),
+            "amount_due": st.column_config.NumberColumn("amount_due", min_value=0, step=50),
+            "bank_statement_received": st.column_config.CheckboxColumn("Bank Stmt Rcvd"),
+            "sales_report_received": st.column_config.CheckboxColumn("Sales Rpt Rcvd"),
+        },
+    )
+
+    col1, col2 = st.columns(2)
     with col1:
-        st.metric("Total Clients", len(clients_df))
+        if st.button("💾 Save All Changes to CSV", type="primary"):
+            try:
+                # Snapshot pre-edit state for undo (P2 minimal stack, last 3)
+                snapshot = req_df.copy()
+                master = req_df.set_index("request_id")
+                for _, row in edited.iterrows():
+                    rid = row["request_id"]
+                    for col in [
+                        "status",
+                        "amount_due",
+                        "due_date",
+                        "received_date",
+                        "notes",
+                        "bank_statement_received",
+                        "sales_report_received",
+                    ]:
+                        if rid in master.index:
+                            master.at[rid, col] = row[col]
+                updated = master.reset_index()
+                save_requests(updated)
+                # Push to defensive undo stack (trim to last 3)
+                if not isinstance(st.session_state.get("undo_stack"), list):
+                    st.session_state.undo_stack = []
+                st.session_state.undo_stack.append(snapshot)
+                st.session_state.undo_stack = st.session_state.undo_stack[-3:]
+                st.success(
+                    "✅ Saved changes to RevenueRequests.csv. Filters will pick up immediately."
+                )
+                st.cache_data.clear()
+                st.rerun()
+            except Exception:
+                st.error("Save failed — no data written. Please retry or reload.")
+
+        if st.session_state.get("undo_stack"):
+            if st.button("↩️ Undo Last Change", type="secondary"):
+                try:
+                    prev = st.session_state.undo_stack.pop()
+                    save_requests(prev)
+                    st.warning("Last edit undone from in-memory snapshot (within this session).")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception:
+                    st.error("Undo failed.")
+
     with col2:
-        st.metric("Pending Requests", len(requests_df) if not requests_df.empty else 0)
-    with col3:
-        st.metric("Completion Rate", "72%")
+        # Export of current filtered view
+        csv_buf = io.StringIO()
+        df.to_csv(csv_buf, index=False)
+        st.download_button(
+            "📥 Export filtered CSV",
+            csv_buf.getvalue(),
+            file_name=f"revenue_filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        )
 
-    st.subheader("Recent Revenue Requests")
-    if not requests_df.empty:
-        st.dataframe(requests_df.head(10), use_container_width=True)
-    else:
-        st.info("No data loaded yet.")
+    st.markdown("---")
+    st.subheader("Quick Bulk Status Update")
 
-elif page == "Clients":
-    st.header("👥 Clients")
-    if not clients_df.empty:
-        st.dataframe(clients_df, use_container_width=True)
-    else:
-        st.info("Clients data not available yet.")
+    # === P1 UX FIX (v2.11) – directly addresses runtime feedback: "Use business_name column values in bulk dropdown" ===
+    # Build human-readable labels while keeping the stable PK (request_id) for the write path.
+    # One client may have multiple open requests, so we show "request_id – business_name" and resolve back to PKs.
+    df_for_select = df.copy()
+    display_options = [
+        f"{int(rid)} – {name}"
+        for rid, name in zip(
+            df_for_select["request_id"], df_for_select["business_name"], strict=True
+        )
+    ]
+    id_map = {
+        label: rid for label, rid in zip(display_options, df_for_select["request_id"], strict=True)
+    }
 
-elif page == "Revenue Requests":
-    st.header("💰 Revenue Requests")
-    if not requests_df.empty:
-        st.dataframe(requests_df, use_container_width=True)
-    else:
-        st.info("RevenueRequests.csv not found yet.")
+    selected_labels = st.multiselect(
+        "Select requests to bulk-update (Client name shown for clarity):",
+        options=display_options,
+        default=[],
+    )
+    selected_ids = [
+        id_map[label] for label in selected_labels
+    ]  # resolved back to the real numeric PKs
 
-st.caption("SLAM Services Digital Transformation • Secure Azure Deployment")
+    new_bulk = st.selectbox("Set status to:", ["Pending", "Received", "Invoiced", "Paid"], index=1)
+
+    if st.button("Apply Bulk Update", disabled=len(selected_labels) == 0):
+        if selected_ids:
+            master = req_df.set_index("request_id")
+            for rid in selected_ids:
+                if rid in master.index:
+                    master.at[rid, "status"] = new_bulk
+            updated = master.reset_index()
+            save_requests(updated)
+            st.success(f"Updated {len(selected_ids)} request(s) to status '{new_bulk}'")
+            st.cache_data.clear()
+            st.rerun()
+
+
+# --- Main application body ---
+def main():
+    clients_df = load_clients()
+    req_df = load_requests()
+
+    filters = render_global_filters(req_df)
+    st.session_state["last_filter_industry"] = filters["industry"]
+
+    filtered = apply_filters(req_df, clients_df, filters)
+
+    # Page navigation
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Go to", ["Dashboard", "Clients", "Revenue Requests"], index=0)
+
+    if page == "Dashboard":
+        dashboard_page(clients_df, req_df, filtered)
+    elif page == "Clients":
+        clients_page(clients_df, req_df, filtered)
+    elif page == "Revenue Requests":
+        requests_page(req_df, clients_df, filtered)
+
+    # Footer + export helpers
+    st.caption(
+        "SLAM Services Digital Transformation • Azure-hosted Revenue Reporter • Production-Ready v2"
+    )
+
+    if st.sidebar.button("🔄 Force reload data (clear caches)"):
+        st.cache_data.clear()
+        st.rerun()
+
+    # --- Structured, Persistent Feedback Collection (Phase 2.5 core process) ---
+    with st.sidebar.expander("📣 Submit Runtime Feedback", expanded=False):
+        st.caption(
+            "This form writes directly to the persistent feedback_log.csv so every observation is captured for the next iteration cycle."
+        )
+        with st.form("feedback_form", clear_on_submit=True):
+            reported_by = st.selectbox("Reported by", ["Laura", "Stef", "Patty", "Robert", "Other"])
+            category = st.selectbox(
+                "Category",
+                [
+                    "Global Filter",
+                    "Dashboard",
+                    "Revenue Requests Table",
+                    "Bulk Update",
+                    "Data/Export",
+                    "Performance/Security",
+                    "Other",
+                ],
+            )
+            description = st.text_area("What is broken or missing? (be specific)", height=80)
+            priority = st.selectbox(
+                "Priority (your view)",
+                ["P0 - Blocking daily work", "P1 - Important for accuracy", "P2 - Nice to have"],
+            )
+            if st.form_submit_button("Submit Feedback to Log"):
+                if description.strip():
+                    log_path = DATA_PATH / "feedback_log.csv"
+                    import csv as _csv
+                    from datetime import datetime as _dt
+
+                    row = [
+                        _dt.now().isoformat(timespec="seconds"),
+                        reported_by,
+                        category,
+                        description.strip().replace("\n", " "),
+                        priority,
+                        "Open",
+                        "v2.10+",
+                    ]
+                    with open(log_path, "a", encoding="utf-8", newline="") as f:
+                        _csv.writer(f).writerow(row)
+                    st.success(
+                        "✅ Feedback recorded. Thank you — it will be reviewed in the next cycle."
+                    )
+                else:
+                    st.warning("Please enter a description before submitting.")
+
+    # Monthly revenue summary export (always available)
+    if st.sidebar.button("📆 Generate Monthly Revenue Summary"):
+        summary = req_df.copy()
+        summary["due_month"] = (
+            pd.to_datetime(summary["due_date"], errors="coerce").dt.to_period("M").astype(str)
+        )
+        summary_group = (
+            summary.groupby(["due_month", "status"])
+            .agg(total_requests=("request_id", "count"), total_amount=("amount_due", "sum"))
+            .reset_index()
+        )
+        csv_sum = io.StringIO()
+        summary_group.to_csv(csv_sum, index=False)
+        st.sidebar.download_button(
+            label="📥 Download Monthly Summary CSV",
+            data=csv_sum.getvalue(),
+            file_name=f"monthly_revenue_summary_{datetime.now().strftime('%Y%m')}.csv",
+            mime="text/csv",
+        )
+
+
+if __name__ == "__main__":
+    main()

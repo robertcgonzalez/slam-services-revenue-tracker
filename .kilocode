@@ -1,8 +1,14 @@
 # .kilocode - SLAM Services Project Rules
 
-# Single Source of Truth: SLAM Services - Digital Transformation Blueprint.md (v2.7)
+# Single Source of Truth: SLAM Services - Digital Transformation Blueprint.md (v2.15)
 
-You are Grok Build 0.1 operating in Code Agent mode for the SLAM Services Digital Transformation Project.
+You are assisting the SLAM Services Digital Transformation Project. **Cursor** (Composer / Agent / inline edit) is the **primary** AI coding agent for this workspace.
+
+## Agent roles (v2.15+)
+
+- **Cursor** is the **lead** agent — owns decisions, multi-file edits, refactors, verification, and Blueprint updates per project rules.
+- **Kilo Code** (`kilocode.kilo-code`) remains **available as a secondary** tool for targeted or alternate workflows; it does not override Cursor’s lead role.
+- Same Blueprint + Change Log obligations apply regardless of which agent surface is used.
 
 ## Core Principles
 
@@ -16,7 +22,7 @@ You are Grok Build 0.1 operating in Code Agent mode for the SLAM Services Digita
 
 - The **SLAM Services - Digital Transformation Blueprint.md** is the **Single Source of Truth** and a living document.
 - Updating the Blueprint (especially the Change Log at the top) is a **normal, expected, and high-priority part** of completing any significant task or milestone.
-- When a major step is completed (e.g. successful deployment, new feature, configuration change), **always** add a clear, concise entry to the Change Log with date, version bump (e.g. v2.8), and summary.
+- When a major step is completed (e.g. successful deployment, new feature, configuration change), **always** add a clear, concise entry to the Change Log with date, version bump (e.g. v2.15), and summary.
 - Prefer small, focused document updates over large speculative ones.
 - Do not get stuck in recursive document analysis — make the update and move forward unless explicitly asked otherwise.
 
@@ -26,13 +32,13 @@ You are Grok Build 0.1 operating in Code Agent mode for the SLAM Services Digita
 - The agent is **explicitly authorized** to make pertinent improvements to:
   - Blueprint.md (especially Change Log)
   - README.md (onboarding & status)
-  - .kilocode (rules & clarity)
+  - `.kilocode` and `.cursor/rules/` (rules & clarity)
 - After major milestones (deployment, fixes), **always** update the Blueprint Change Log with version bump and concise summary.
 - Keep updates focused and factual.
 
 ## Project Context
 
-- Phase 2 focus: Secure Azure deployment of Streamlit Revenue Reporting Tracker.
+- Phase 2.5 focus: Stabilize Revenue Tracker (Streamlit + CSVs) on Azure; **Cursor-led** dev environment with Kilo as secondary (v2.15).
 - Current tech stack: Python + Streamlit, Azure CLI, eventual PostgreSQL.
 - Goal: Reduce manual work for Laura/Stef, enable transition to Patty & Robert.
 
@@ -43,10 +49,11 @@ You are Grok Build 0.1 operating in Code Agent mode for the SLAM Services Digita
 - Update the Blueprint Change Log when deploying or completing major items.
 - Keep code clean, well-commented, and production-ready.
 - Prefer Azure-native solutions with good security (Entra ID where possible).
+- When Cursor and Kilo are both available, **defer to Cursor** for orchestration and final edits unless the user explicitly requests Kilo.
 
 ## Style & Quality
 
-- Use Python best practices.
+- Use Python best practices (Ruff + Black per `pyproject.toml`).
 - Write clear commit messages.
 - Document decisions in the Blueprint when appropriate.
 - Keep Streamlit UI professional and user-friendly.

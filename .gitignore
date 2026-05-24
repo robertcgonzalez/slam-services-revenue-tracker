@@ -29,11 +29,19 @@ ENV/
 env/
 
 # IDE / Editor
-.vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# Allow sharing of key VS Code / Cursor workspace configs
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.md
+!.cursor/rules/
+!.cursor/rules/**
 
 # OS
 .DS_Store
@@ -46,10 +54,12 @@ logextract/
 *.zip
 __pycache__/
 
-# Data (do NOT commit real client financial data)
-# Uncomment below only if you deliberately want to ship sample CSVs in the repo
-# Data/**/*.csv
-# Data/**/*.xlsx
+# Client financial / PII data – NEVER commit to any repo
+**/*.csv
+**/*.xlsx
+**/*.xls
+Data/
+Data/**
 
 # Secrets / Local config
 .env
@@ -62,5 +72,11 @@ secrets/
 .kilocode/
 .kilo/
 
+# Continue.dev (unused — Cursor + Kilo Code only)
+.continue/
+
 # Node (if any future tooling)
 node_modules/
+
+# Local editor backups
+*.bak

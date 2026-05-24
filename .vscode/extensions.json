@@ -1,0 +1,28 @@
+{
+  "recommendations": [
+    "kilocode.kilo-code",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "ms-python.black-formatter",
+    "charliermarsh.ruff",
+    "njpwerner.autodocstring",
+    "mechatroner.rainbow-csv",
+    "ms-toolsai.datawrangler",
+    "ms-vscode.azure-account",
+    "ms-azuretools.vscode-azureappservice",
+    "ms-azuretools.vscode-azureresourcegroups",
+    "ms-vscode.powershell",
+    "davidanson.vscode-markdownlint",
+    "shd101wyy.markdown-preview-enhanced",
+    "yzhang.markdown-all-in-one",
+    "editorconfig.editorconfig",
+    "redhat.vscode-yaml",
+    "mikestead.dotenv",
+    "christian-kohler.path-intellisense",
+    "usernamehw.errorlens",
+    "gruntfuggly.todo-tree",
+    "eamodio.gitlens"
+  ],
+  "unwantedRecommendations": ["vscode-grok.vscode-grok"]
+}

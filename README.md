@@ -7,7 +7,7 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ---
 
-## 📌 Current Status (as of May 23, 2026)
+## 📌 Current Status (as of May 24, 2026)
 
 - **Phase 1** — Revenue Reporting Tracker: **Complete**
 - **Phase 2** — Secure Azure Deployment: **Complete** (F1 tier)
@@ -21,9 +21,11 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ---
 
-## How to Work with Grok / Kilo Code
+## How to Work with Cursor + Kilo Code
 
-When starting a new session, always begin with:
+**Cursor** (Composer / Agent / inline edit) is the **primary / lead** AI coding agent for this project. **Kilo Code** remains available as a **secondary** tool when you want an alternate workflow — it does not override Cursor’s lead role.
+
+When starting a new session in Cursor, begin with:
 
 > "Reference the full SLAM Services Digital Transformation Blueprint.md (latest version) and this README.md. [Your request]"
 
@@ -32,8 +34,10 @@ When starting a new session, always begin with:
 - **`SLAM Services - Digital Transformation Blueprint.md`** — Main living document + Change Log
 - `App/app.py` — Streamlit Revenue Reporting Tracker
 - `requirements.txt` — Python dependencies
-- `.kilocode` — AI agent behavior rules
-- `Data/Revenue_Tracker_Migration/` — Source data
+- `.cursor/rules/slam-services.mdc` — Cursor primary project rules (`alwaysApply`)
+- `.kilocode` — Shared agent principles (Cursor leads; Kilo secondary)
+- `.vscode/` — Shared tasks, launch, lint/format settings
+- `Data/Revenue_Tracker_Migration/` — Source data (local; not in git)
 
 ---
 

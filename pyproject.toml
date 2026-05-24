@@ -1,0 +1,49 @@
+[project]
+requires-python = ">=3.10,<3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+  ".kilo",
+  ".venv",
+  "node_modules",
+  "__pycache__",
+  "*.zip",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "UP",  # pyupgrade
+  "B",   # flake8-bugbear
+]
+ignore = [
+  "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Legacy automation scripts — lint App/ first; tighten Scripts/ over time
+"Scripts/*" = ["B905", "E731", "UP035", "UP006", "B007", "F841"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["App", "Scripts", "Data"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.kilo
+  | \.venv
+  | node_modules
+  | __pycache__
+)/
+'''

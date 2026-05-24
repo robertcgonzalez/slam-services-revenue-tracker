@@ -1,0 +1,20 @@
+Global Filter Panel
+	Request Type:
+		Missing "Payroll"; "Tax prep"
+	Reset filters:
+		Not functioning
+Dashboard
+	Overdue Requests Table:
+		Blank column: no useful data
+		request_id: no useful data
+	Recent Activity table:
+		blank column: no useful data
+Revenue Requests Page
+	Table:
+		Edits need an undo function
+		Fields need data validation and relational lookup (where applicable)
+		Right-most columns are missing services (see request type). Add Yes/No checkbox application.
+		First column: no useful data
+		business_name column: no useful data
+	Quick Bulk Status Update SEction:
+		USe business_name column values in "Select request IDs to bulk-update:" dropdown in lieu of request_id
