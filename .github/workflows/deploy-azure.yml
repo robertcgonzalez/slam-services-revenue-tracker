@@ -18,6 +18,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify Azure publish profile secret
+        run: |
+          if [ -z "${{ secrets.AZUREAPPSERVICEPUBLISHPROFILE }}" ]; then
+            echo "::error::GitHub secret AZUREAPPSERVICEPUBLISHPROFILE is missing or empty."
+            echo "Add it under Settings → Secrets and variables → Actions."
+            echo "Value: full publish profile XML from Azure Portal → App Service → Get publish profile."
+            exit 1
+          fi
+          echo "Publish profile secret is present."
+
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
@@ -29,12 +39,12 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: "Deploy to Azure Web App"
+      - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          slot-name: 'production'
+          slot-name: production
           publish-profile: ${{ secrets.AZUREAPPSERVICEPUBLISHPROFILE }}
           package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
 

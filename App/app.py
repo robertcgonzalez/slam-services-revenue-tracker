@@ -161,6 +161,18 @@ def load_requests():
     return pd.DataFrame()
 
 
+def format_request_id(rid) -> str:
+    """Display-friendly request_id (load_requests stores as str)."""
+    s = str(rid).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        return s[:-2]
+    return s
+
+
+def bulk_select_label(rid, name: str) -> str:
+    return f"{format_request_id(rid)} – {name}"
+
+
 # --- Global filters in sidebar (propagate across pages) ---
 def render_global_filters(req_df):
     st.sidebar.title("🔎 Global Filters")
@@ -422,7 +434,7 @@ def requests_page(req_df, clients_df, filtered_global):
     with col1:
         if st.button("💾 Save All Changes to CSV", type="primary"):
             try:
-                # Snapshot pre-edit state for undo (P2 minimal stack, last 3)
+                # Snapshot pre-edit state for undo (P2 stack, last 5 per Section 14.2)
                 snapshot = req_df.copy()
                 master = req_df.set_index("request_id")
                 for _, row in edited.iterrows():
@@ -440,11 +452,11 @@ def requests_page(req_df, clients_df, filtered_global):
                             master.at[rid, col] = row[col]
                 updated = master.reset_index()
                 save_requests(updated)
-                # Push to defensive undo stack (trim to last 3)
+                # Push to defensive undo stack (trim to last 5)
                 if not isinstance(st.session_state.get("undo_stack"), list):
                     st.session_state.undo_stack = []
                 st.session_state.undo_stack.append(snapshot)
-                st.session_state.undo_stack = st.session_state.undo_stack[-3:]
+                st.session_state.undo_stack = st.session_state.undo_stack[-5:]
                 st.success(
                     "✅ Saved changes to RevenueRequests.csv. Filters will pick up immediately."
                 )
@@ -482,7 +494,7 @@ def requests_page(req_df, clients_df, filtered_global):
     # One client may have multiple open requests, so we show "request_id – business_name" and resolve back to PKs.
     df_for_select = df.copy()
     display_options = [
-        f"{int(rid)} – {name}"
+        bulk_select_label(rid, name)
         for rid, name in zip(
             df_for_select["request_id"], df_for_select["business_name"], strict=True
         )
@@ -582,7 +594,7 @@ def main():
                         description.strip().replace("\n", " "),
                         priority,
                         "Open",
-                        "v2.10+",
+                        "v2.25",
                     ]
                     with open(log_path, "a", encoding="utf-8", newline="") as f:
                         _csv.writer(f).writerow(row)

@@ -7,11 +7,12 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ---
 
-## 📌 Current Status (as of May 24, 2026)
+## 📌 Current Status (as of May 24, 2026 — Blueprint v2.25)
 
 - **Phase 1** — Revenue Reporting Tracker: **Complete**
 - **Phase 2** — Secure Azure Deployment: **Complete** (F1 tier)
-- **Status**: Live on Azure. Local workspace active for further development.
+- **Phase 2.5** — Stabilization (P0–P2): **Complete in app**; deploy via GitHub Actions (`AZUREAPPSERVICEPUBLISHPROFILE` secret) or manual zip
+- **Status**: Live on Azure. CI deploy pipeline hardened; confirm production after next successful deploy.
 
 **Live Application**:  
 → [http://slam-services-revenue-tracker.azurewebsites.net/](http://slam-services-revenue-tracker.azurewebsites.net/)
