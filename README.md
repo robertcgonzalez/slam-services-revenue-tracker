@@ -7,14 +7,14 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ---
 
-## 📌 Current Status (as of May 24, 2026 — Blueprint v2.26)
+## 📌 Current Status (as of May 24, 2026 — Blueprint v2.27)
 
 - **Phase 1** — Revenue Reporting Tracker: **Complete**
 - **Phase 2** — Secure Azure Deployment: **Complete** (F1 tier)
 - **Phase 2.5** — Stabilization (P0–P2): **Complete in app**
-- **P0 (May 24)** — Azure CSV path / deploy packaging: **Fixed in code** — redeploy required (see below)
-- **Phase 3 prep** — PostgreSQL dual-mode + migration script skeleton: **In repo** (`USE_POSTGRES` off by default)
-- **Status**: Redeploy with `Data/` present on App Service (manual zip or preserved folder + CI `clean: false`)
+- **P0 Azure CSV path (v2.26)** — **Fixed and live** (manual zip deploy confirmed)
+- **Local dev (v2.27)** — **Working** — Python 3.10 `.venv` rebuilt; Streamlit runs locally
+- **Phase 3 prep** — PostgreSQL dual-mode + migration script skeleton (`USE_POSTGRES` off by default)
 
 **Live Application**:  
 → [http://slam-services-revenue-tracker.azurewebsites.net/](http://slam-services-revenue-tracker.azurewebsites.net/)
@@ -62,13 +62,33 @@ Upload `Data/Revenue_Tracker_Migration/` to `/home/site/wwwroot/Data/Revenue_Tra
 
 ## Local verification
 
+### First-time or broken venv (recommended)
+
+If `pip install` fails with **Access is denied** on `.venv`, stop orphaned Streamlit processes first, then rebuild:
+
 ```powershell
 cd C:\SLAM-Services-Project
+.\Scripts\PowerShell\Setup-LocalVenv.ps1
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-ruff check App/
-ruff format App/ Scripts/migrate_to_postgres.py
 streamlit run App/app.py
+```
+
+Manual equivalent:
+
+```powershell
+cd C:\SLAM-Services-Project
+# Stop any streamlit/python using .venv, then:
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt ruff black
+ruff check App/ Scripts/
+streamlit run App/app.py
+```
+
+Migration dry-run (no DB required):
+
+```powershell
+python Scripts/migrate_to_postgres.py --dry-run
 ```
 
 Post-deploy: log in to the live URL; confirm dashboard metrics load (no CSV path error). Check App Service log stream for `Data folder found` from `startup.sh`.
