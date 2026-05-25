@@ -1,0 +1,27 @@
+# SLAM Services OCR Function — v2.43 real-OCR + check-linking dependencies
+#
+# Wired into `_run_ocr_pipeline` in function_app.py:
+# - pdfplumber       : text-layer fast path (matches Scripts/bank-statement-parser.py)
+# - pdf2image        : raster fallback for scanned/image-only PDFs (300 DPI)
+# - easyocr          : OCR engine for the raster fallback + check cropper +
+#                      payee extraction on the "Pay to the order of" line (v2.43)
+# - pillow + opencv  : check cropping (port of Scripts/smart_check_cropper_final_dynamic.py)
+# - numpy            : shared array backbone
+#
+# v2.43 does NOT add new dependencies — difflib (fuzzy desc matching) is in
+# the Python stdlib, and the matcher reuses the already-loaded EasyOCR Reader.
+#
+# Notes:
+# - opencv-python-headless avoids the GUI dependencies that don't exist on Linux Y1 hosts.
+# - easyocr will lazy-download its English model on the first call; the Function App's
+#   /tmp is writable, so cold starts can take 30-60s but warm calls are fast.
+# - pdf2image requires the `poppler-utils` package to be available at runtime; the Y1
+#   Consumption Linux base image already ships with it, so no extra install is needed.
+
+azure-functions>=1.18.0
+pdfplumber>=0.11.0
+pdf2image>=1.17.0
+easyocr>=1.7.0
+pillow>=10.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.26.0

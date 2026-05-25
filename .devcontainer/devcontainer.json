@@ -1,0 +1,151 @@
+// SLAM Services — GitHub Codespaces / Dev Container configuration (v2.44).
+//
+// This file configures a fully-provisioned Linux container that mirrors the
+// Azure F1 App Service runtime (Python 3.10) plus the heavy local OCR
+// stack (pdfplumber + pdf2image + easyocr + opencv-python-headless +
+// pillow + numpy + system poppler) so Robert can run the full v2.43.2
+// Local Enhanced OCR pipeline in Codespaces with one click.
+//
+// See `.devcontainer/postCreateCommand.sh` for the install script and
+// the README "Development with GitHub Codespaces" section for the user-
+// facing one-click setup walkthrough.
+{
+  "name": "SLAM Services — Python 3.10 + Local Enhanced OCR (v2.44)",
+
+  // Microsoft-maintained Python 3.10 dev container on Debian Bookworm.
+  // Matches `runtime.txt` (python-3.10) and `pyproject.toml`
+  // (requires-python = ">=3.10,<3.11") so dev parity with the live
+  // F1 App Service is guaranteed.
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.10-bookworm",
+
+  // Pre-installed dev container "features" layered on top of the base
+  // image. github-cli is useful for `gh pr create` / `gh issue list`
+  // workflows from inside the Codespace.
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // Codespaces machine sizing — the heavy OCR pipeline (easyocr pulls
+  // in PyTorch, plus opencv + pillow + numpy) needs at least 4 cores
+  // and 8 GB RAM for a usable experience. **Strongly recommend the
+  // 4-core / 16 GB SKU** when creating the Codespace — the pipeline
+  // will run on 8 GB but easyocr cold-start on a multi-page scanned
+  // PDF can spike past 6 GB and trigger swap.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  // Environment variables baked into the container image at build
+  // time. Codespaces-friendly defaults for the Local Enhanced OCR
+  // pipeline — keeps memory under ~3 GB on a 4-core / 16 GB machine
+  // even on multi-page scanned statements. Robert can override these
+  // any time with `export SLAM_LOCAL_OCR_DPI_TEXT=300` if he's on
+  // the larger SKU and wants higher fidelity.
+  "containerEnv": {
+    "SLAM_LOCAL_OCR_DPI_TEXT": "200",
+    "SLAM_LOCAL_OCR_DPI_CROP": "180",
+    "SLAM_LOCAL_OCR_MAX_PAGES_RASTER": "20",
+    "SLAM_LOCAL_OCR_MAX_CHECKS": "30",
+    "SLAM_APP_USER": "Robert (Codespaces)",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "STREAMLIT_SERVER_HEADLESS": "true",
+    "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false"
+  },
+
+  // Per-shell environment overrides — prepend the project venv `bin/`
+  // so `python`, `pip`, `streamlit`, and `ruff` all resolve to the
+  // venv copies once postCreateCommand finishes provisioning.
+  "remoteEnv": {
+    "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}",
+    "VIRTUAL_ENV": "${containerWorkspaceFolder}/.venv"
+  },
+
+  // Streamlit defaults to 8501. forwardPorts publishes it as a Codespaces
+  // public URL; portsAttributes pops a notification with the URL the
+  // first time `streamlit run App/app.py` opens the port.
+  "forwardPorts": [8501],
+  "portsAttributes": {
+    "8501": {
+      "label": "Streamlit (App/app.py)",
+      "onAutoForward": "notify",
+      "protocol": "http"
+    }
+  },
+
+  // Idempotent provisioning script — installs system poppler + the
+  // full pip dependency set + heavy OCR libs + pre-warms the easyocr
+  // English model so the first OCR run isn't a 30-60 s cold start.
+  "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
+
+  // VS Code (Codespaces) editor configuration — extensions + settings
+  // mirror `.vscode/extensions.json` and `.vscode/settings.json` so
+  // the in-browser experience matches the desktop Cursor / VS Code
+  // workflow the team is already using locally.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff",
+        "njpwerner.autodocstring",
+        "mechatroner.rainbow-csv",
+        "ms-toolsai.datawrangler",
+        "davidanson.vscode-markdownlint",
+        "shd101wyy.markdown-preview-enhanced",
+        "yzhang.markdown-all-in-one",
+        "editorconfig.editorconfig",
+        "redhat.vscode-yaml",
+        "mikestead.dotenv",
+        "christian-kohler.path-intellisense",
+        "usernamehw.errorlens",
+        "gruntfuggly.todo-tree",
+        "eamodio.gitlens",
+        "ms-vscode.powershell",
+        "ms-azuretools.vscode-azureappservice",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-vscode.azure-account",
+        "kilocode.kilo-code"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "python.analysis.typeCheckingMode": "basic",
+        "[python]": {
+          "editor.formatOnSave": true,
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
+        },
+        "ruff.lint.run": "onType",
+        "ruff.organizeImports": true,
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/.ruff_cache": true,
+          "**/*.pyc": true,
+          ".venv": false
+        },
+        "files.watcherExclude": {
+          "**/.venv/**": true,
+          "**/__pycache__/**": true,
+          "**/.ruff_cache/**": true
+        },
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "git.openRepositoryInParentFolders": "always"
+      }
+    }
+  },
+
+  // Codespaces sets `CODESPACES=true` automatically (consumed by
+  // `App/local_enhanced_ocr.py` to log a Codespaces-aware startup
+  // message and warn about resource usage). Run as the standard
+  // non-root `vscode` user — sudo is available for apt-get installs
+  // inside `postCreateCommand.sh`.
+  "remoteUser": "vscode"
+}

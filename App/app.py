@@ -11,10 +11,13 @@ try:
     from bank_statements import (
         GROK_CSV_FIELDS,
         GROK_VISION_HINT,
+        LOCAL_ENHANCED_OCR_VERSION,
         PIVOT_GROUP_BY_OPTIONS,
         PIVOT_VALUE_KIND_OPTIONS,
         ZERO_TRANSACTIONS_MSG,
         apply_payee_rules,
+        azure_ocr_configured,
+        azure_ocr_status,
         build_grok_vision_prompt,
         build_statement_pivot,
         count_pattern_matches,
@@ -22,10 +25,13 @@ try:
         format_processing_log,
         load_grok_vision_csv,
         load_payee_rules,
+        local_enhanced_ocr_available,
         missing_document_counts,
         reconcile_statement_totals,
         resolve_payee_rules_path,
         rules_library_summary,
+        run_azure_ocr_pipeline,
+        run_local_enhanced_ocr_pipeline,
         run_statement_pipeline,
         scripts_available,
         style_low_confidence_rows,
@@ -130,6 +136,68 @@ except ImportError:
     PIVOT_GROUP_BY_OPTIONS = ("Category", "Payee")
     PIVOT_VALUE_KIND_OPTIONS = ("sum", "count")
 
+    def azure_ocr_configured():
+        import os as _os
+
+        return bool(
+            (_os.environ.get("AZURE_OCR_FUNCTION_URL") or "").strip()
+            and (_os.environ.get("AZURE_OCR_FUNCTION_KEY") or "").strip()
+        )
+
+    def azure_ocr_status():
+        import os as _os
+
+        url = (_os.environ.get("AZURE_OCR_FUNCTION_URL") or "").strip()
+        key = (_os.environ.get("AZURE_OCR_FUNCTION_KEY") or "").strip()
+        return {
+            "configured": bool(url) and bool(key),
+            "url": url,
+            "has_key": bool(key),
+            "hint": (
+                "Set AZURE_OCR_FUNCTION_URL and AZURE_OCR_FUNCTION_KEY App Settings "
+                "to enable the heavy-OCR path."
+            ),
+        }
+
+    def run_azure_ocr_pipeline(_pdf_bytes, _pdf_filename, _client_name, _logger, **_kwargs):
+        return (
+            None,
+            ["[WARN] Azure OCR pipeline unavailable in this deploy (bank_statements out of sync)."],
+            {
+                "status": "error",
+                "configured": False,
+                "transaction_count": 0,
+                "grok_totals": None,
+                "message": "bank_statements module out of sync",
+            },
+        )
+
+    LOCAL_ENHANCED_OCR_VERSION = "v2.43.2"
+
+    def local_enhanced_ocr_available():
+        return False, {}, []
+
+    def run_local_enhanced_ocr_pipeline(
+        _pdf_bytes, _pdf_filename, _client_name, _logger, **_kwargs
+    ):
+        return (
+            None,
+            [
+                "[WARN] Local Enhanced OCR pipeline unavailable in this deploy "
+                "(bank_statements out of sync)."
+            ],
+            {
+                "status": "error",
+                "configured": False,
+                "transaction_count": 0,
+                "grok_totals": None,
+                "cropped_checks": [],
+                "linked_count": 0,
+                "service_version": LOCAL_ENHANCED_OCR_VERSION,
+                "message": "bank_statements module out of sync",
+            },
+        )
+
     from bank_statements import (
         missing_document_counts,
         run_statement_pipeline,
@@ -141,7 +209,7 @@ from diagnostics import get_app_info, get_app_user, get_data_freshness, get_oper
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.40"
+APP_VERSION = "v2.44"
 LOGGER = setup_app_logging()
 
 SLAM_CSS = """
@@ -1954,6 +2022,18 @@ def _render_statement_pivot_section(selected_client: str, txn_df: pd.DataFrame) 
         )
 
 
+_MODE_SUFFIX_MAP = {
+    "azure_ocr": " via Azure OCR Function",
+    "local_enhanced": " via Local Enhanced OCR",
+}
+
+
+def _mode_suffix(mode: str | None) -> str:
+    """Human-friendly suffix for the success/partial banner ("via …")."""
+
+    return _MODE_SUFFIX_MAP.get(str(mode or ""), "")
+
+
 def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None:
     """Core Workstream #2 MVP — upload PDF, run parser pipeline, review, mark received."""
     st.header("🏦 Bank Statements")
@@ -2002,6 +2082,91 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
         key="bank_stmt_pdf_upload",
     )
 
+    # --- Processing mode selector (v2.41 → v2.43.2) ---
+    # Three engines are now exposed so Laura / Robert can pick the right tool:
+    #   1. Lightweight Parser — fast in-process pdfplumber path; the safe default.
+    #   2. Local Enhanced OCR (Robert only) — full v2.43 pipeline running in-process
+    #      (pdfplumber → easyocr fallback → opencv check cropping → check ↔ transaction
+    #      matcher). Gives Robert the intelligent check-linking experience locally
+    #      while the Azure Function deploy stays parked (Blueprint v2.43.1 § Change Log).
+    #   3. Azure OCR — offloads the same v2.43 pipeline to the dedicated
+    #      `slam-ocr-function` Function App; required for Laura's production runs.
+    ocr_status = azure_ocr_status()
+    local_ocr_available, local_ocr_caps, local_ocr_missing = local_enhanced_ocr_available()
+
+    azure_ocr_label = "Azure OCR (Recommended for scanned PDFs)"
+    if not ocr_status["configured"]:
+        azure_ocr_label += " — not configured"
+
+    local_enhanced_label = "🖥️ Local Enhanced OCR (Robert only)"
+    if not local_ocr_available:
+        local_enhanced_label += " — heavy libs missing"
+
+    processing_mode_options = ("Lightweight Parser", local_enhanced_label, azure_ocr_label)
+    default_mode_index = 0
+    persisted_mode = st.session_state.get("bank_stmt_mode")
+    if persisted_mode == "local_enhanced":
+        default_mode_index = 1
+    elif persisted_mode == "azure_ocr" and ocr_status["configured"]:
+        default_mode_index = 2
+
+    processing_mode_label = st.radio(
+        "Processing mode",
+        processing_mode_options,
+        index=default_mode_index,
+        horizontal=True,
+        key="bank_stmt_mode_radio",
+        help=(
+            "Lightweight Parser runs the existing pdfplumber-only path (fast for text-layer PDFs). "
+            "Local Enhanced OCR runs the full v2.43 pipeline locally (pdfplumber → easyocr "
+            "fallback → check cropping → intelligent check ↔ transaction linking) — best for "
+            "Robert's dev environment while the Azure Function deploy is parked. "
+            "Azure OCR offloads the same heavy pipeline to the dedicated `slam-ocr-function` "
+            "Function App for production runs."
+        ),
+    )
+    if processing_mode_label.startswith("🖥️"):
+        selected_mode = "local_enhanced"
+    elif processing_mode_label.startswith("Azure OCR"):
+        selected_mode = "azure_ocr"
+    else:
+        selected_mode = "parser"
+    st.session_state["bank_stmt_mode"] = selected_mode
+    use_azure_ocr = selected_mode == "azure_ocr"
+    use_local_enhanced = selected_mode == "local_enhanced"
+
+    if use_local_enhanced:
+        if local_ocr_available and not local_ocr_missing:
+            st.info(
+                f"🖥️ **Local Enhanced Mode (Robert only — full check linking)** active. "
+                f"Running the v2.43 pipeline in-process ({LOCAL_ENHANCED_OCR_VERSION}): "
+                "pdfplumber → easyocr fallback → opencv check cropping → intelligent "
+                "check ↔ transaction matcher."
+            )
+        elif local_ocr_available and local_ocr_missing:
+            st.warning(
+                f"🖥️ **Local Enhanced Mode (Robert only)** active with reduced capabilities — "
+                f"missing: `{', '.join(local_ocr_missing)}`. Fast-path transactions will still "
+                "be extracted, but check cropping and check-to-transaction linking will be "
+                "skipped. Install the full Function requirements locally to unlock check linking: "
+                "`pip install pdfplumber pdf2image easyocr pillow opencv-python-headless numpy`."
+            )
+        else:
+            st.warning(
+                "🖥️ Local Enhanced OCR is unavailable in this environment — required heavy "
+                f"libraries are missing (`{', '.join(local_ocr_missing) or 'pdfplumber'}`). "
+                "The page will fall back to the **Lightweight Parser** for this run. To enable "
+                "the full v2.43 pipeline locally, install: "
+                "`pip install pdfplumber pdf2image easyocr pillow opencv-python-headless numpy`."
+            )
+
+    if use_azure_ocr and not ocr_status["configured"]:
+        st.warning(
+            "Azure OCR Function is not configured on this App Service. "
+            "Set the `AZURE_OCR_FUNCTION_URL` and `AZURE_OCR_FUNCTION_KEY` App Settings, "
+            "then restart the app. The page will fall back to the lightweight parser for this run."
+        )
+
     if st.button("Process Statement", type="primary", key="bank_stmt_process"):
         if not uploaded:
             st.warning("Upload at least one PDF before processing.")
@@ -2013,17 +2178,139 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             cropper_msg: str | None = None
             last_meta: dict = {}
             last_pdf_name: str = ""
+            last_grok_totals: dict | None = None
+
+            run_with_azure = use_azure_ocr and ocr_status["configured"]
+            run_with_local_enhanced = use_local_enhanced and local_ocr_available
+            if use_azure_ocr and not ocr_status["configured"]:
+                run_with_azure = False
+                all_logs.append(
+                    "[WARN] Azure OCR requested but not configured — falling back to parser."
+                )
+            if use_local_enhanced and not local_ocr_available:
+                run_with_local_enhanced = False
+                all_logs.append(
+                    "[WARN] Local Enhanced OCR requested but required libraries are missing "
+                    f"({', '.join(local_ocr_missing) or 'pdfplumber'}) — falling back to parser."
+                )
+
+            if run_with_azure:
+                run_mode = "azure_ocr"
+            elif run_with_local_enhanced:
+                run_mode = "local_enhanced"
+            else:
+                run_mode = "parser"
+
             for up in uploaded:
                 all_logs.append(f"========== {up.name} ==========")
-                log_event(LOGGER, "bank_stmt_process_start", client=selected_client, file=up.name)
-                df, logs, csv_path, meta = run_statement_pipeline(
-                    up.getvalue(),
-                    up.name,
+                log_event(
                     LOGGER,
+                    "bank_stmt_process_start",
+                    client=selected_client,
+                    file=up.name,
+                    mode=run_mode,
                 )
+
+                df: pd.DataFrame | None = None
+                logs: list[str] = []
+                csv_path: Path | None = None
+                meta: dict = {}
+
+                if run_with_azure:
+                    df_ocr, logs_ocr, meta_ocr = run_azure_ocr_pipeline(
+                        up.getvalue(),
+                        up.name,
+                        selected_client,
+                        LOGGER,
+                    )
+                    all_logs.extend(logs_ocr)
+                    if df_ocr is None or df_ocr.empty:
+                        all_logs.append(
+                            "[WARN] Azure OCR returned no transactions — falling back to "
+                            "lightweight parser for this file."
+                        )
+                        # Graceful fallback: parser still runs so Laura isn't blocked.
+                        df, logs, csv_path, meta = run_statement_pipeline(
+                            up.getvalue(),
+                            up.name,
+                            LOGGER,
+                        )
+                        all_logs.extend(logs)
+                        meta = dict(meta or {})
+                        meta["azure_ocr_meta"] = meta_ocr
+                    else:
+                        df = df_ocr
+                        meta = {
+                            "status": meta_ocr.get("status", "partial"),
+                            "csv_path": None,
+                            "pdf_path": None,
+                            "cropper_skipped": True,
+                            "cropper_user_message": None,
+                            "raw_text": "",
+                            "text_layer_found": False,
+                            "cropped_dir": None,
+                            "cropped_check_count": 0,
+                            "transaction_count": int(len(df)),
+                            "grok_totals": meta_ocr.get("grok_totals"),
+                            "azure_ocr_meta": meta_ocr,
+                        }
+                        if meta_ocr.get("grok_totals"):
+                            last_grok_totals = meta_ocr["grok_totals"]
+                elif run_with_local_enhanced:
+                    df_local, logs_local, meta_local = run_local_enhanced_ocr_pipeline(
+                        up.getvalue(),
+                        up.name,
+                        selected_client,
+                        LOGGER,
+                    )
+                    all_logs.extend(logs_local)
+                    if df_local is None or df_local.empty:
+                        all_logs.append(
+                            "[WARN] Local Enhanced OCR returned no transactions — falling back "
+                            "to lightweight parser for this file."
+                        )
+                        # Graceful fallback: same behavior as the Azure path.
+                        df, logs, csv_path, meta = run_statement_pipeline(
+                            up.getvalue(),
+                            up.name,
+                            LOGGER,
+                        )
+                        all_logs.extend(logs)
+                        meta = dict(meta or {})
+                        meta["local_enhanced_ocr_meta"] = meta_local
+                    else:
+                        df = df_local
+                        cropped_checks = meta_local.get("cropped_checks") or []
+                        meta = {
+                            "status": meta_local.get("status", "partial"),
+                            "csv_path": None,
+                            "pdf_path": None,
+                            "cropper_skipped": False,
+                            "cropper_user_message": None,
+                            "raw_text": "",
+                            "text_layer_found": False,
+                            # Re-use the existing cropped-check metadata keys so the
+                            # downstream Prepare-for-Grok-Vision section keeps working;
+                            # the cropper isn't on-disk in local enhanced mode so the
+                            # directory stays None.
+                            "cropped_dir": None,
+                            "cropped_check_count": int(len(cropped_checks)),
+                            "transaction_count": int(len(df)),
+                            "grok_totals": meta_local.get("grok_totals"),
+                            "local_enhanced_ocr_meta": meta_local,
+                        }
+                        if meta_local.get("grok_totals"):
+                            last_grok_totals = meta_local["grok_totals"]
+                else:
+                    df, logs, csv_path, meta = run_statement_pipeline(
+                        up.getvalue(),
+                        up.name,
+                        LOGGER,
+                    )
+                    all_logs.extend(logs)
+
                 last_meta = meta
                 last_pdf_name = up.name
-                all_logs.extend(logs)
                 if meta.get("cropper_user_message"):
                     cropper_msg = meta["cropper_user_message"]
                 if df is not None:
@@ -2079,7 +2366,16 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             st.session_state["bank_stmt_rules_info"] = rules_info
             # Parser path has no Grok TOTALS line — clear any stale value so the
             # reconciliation banner correctly reports "no_reference" for this run.
-            st.session_state["bank_stmt_grok_totals"] = None
+            # Azure OCR returns its own grok_totals payload; surface it when present
+            # so the reconciliation banner cross-checks the detailed rows.
+            st.session_state["bank_stmt_grok_totals"] = last_grok_totals
+            st.session_state["bank_stmt_last_mode"] = run_mode
+            st.session_state["bank_stmt_azure_ocr_meta"] = (
+                last_meta.get("azure_ocr_meta") if isinstance(last_meta, dict) else None
+            )
+            st.session_state["bank_stmt_local_enhanced_ocr_meta"] = (
+                last_meta.get("local_enhanced_ocr_meta") if isinstance(last_meta, dict) else None
+            )
             st.session_state.pop("bank_stmt_needs_review", None)
             st.session_state.pop("bank_stmt_reconciliation", None)
             if last_df is not None:
@@ -2095,15 +2391,28 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
                         st.warning(ZERO_TRANSACTIONS_MSG)
                     st.info(GROK_VISION_HINT)
                 elif last_status == "partial":
+                    via = _mode_suffix(st.session_state.get("bank_stmt_last_mode"))
                     st.warning(
-                        f"Partial success: {row_count} transactions extracted from "
-                        f"{len(uploaded)} file(s). Optional check cropping did not complete — "
-                        "see processing log."
+                        f"Partial success: {row_count} transactions extracted{via} from "
+                        f"{len(uploaded)} file(s). See processing log for details."
                     )
                 else:
+                    via = _mode_suffix(st.session_state.get("bank_stmt_last_mode"))
                     st.success(
-                        f"Success: extracted {row_count} transactions from {len(uploaded)} file(s)."
+                        f"Success: extracted {row_count} transactions{via} from {len(uploaded)} file(s)."
                     )
+                local_meta = st.session_state.get("bank_stmt_local_enhanced_ocr_meta")
+                if st.session_state.get("bank_stmt_last_mode") == "local_enhanced" and isinstance(
+                    local_meta, dict
+                ):
+                    cropped_count = int(len(local_meta.get("cropped_checks") or []))
+                    linked_count = int(local_meta.get("linked_count") or 0)
+                    if cropped_count or linked_count:
+                        st.info(
+                            f"🖥️ Local Enhanced OCR cropped {cropped_count} check image(s) and "
+                            f"linked {linked_count} to transactions "
+                            f"(payee enhanced from check image where possible)."
+                        )
                 if last_csv:
                     st.info(f"Output CSV: `{last_csv}`")
                 if cropper_msg:
@@ -2426,6 +2735,52 @@ def render_sidebar_extras(
             st.caption("⚠️ Default password — set SLAM_APP_PASSWORD in Azure")
         if info["data_path_override"]:
             st.caption("SLAM_DATA_PATH override active")
+
+        # Azure OCR Function status (v2.41) — quick visibility into whether the
+        # dedicated heavy-OCR path is wired up for this deploy.
+        ocr_state = azure_ocr_status()
+        if ocr_state["configured"]:
+            st.caption("🤖 Azure OCR Function: **configured** ✅")
+        else:
+            st.caption("🤖 Azure OCR Function: **not configured**")
+            st.caption(f"  ↳ {ocr_state['hint']}")
+
+        # Local Enhanced OCR status (v2.43.2) — flips green once the heavy
+        # libraries (pdfplumber + pdf2image + easyocr + opencv + pillow + numpy)
+        # are importable, so Robert can see at a glance whether full check
+        # linking is available in his current Python env.
+        local_ok, local_caps, local_missing = local_enhanced_ocr_available()
+        if local_ok and not local_missing:
+            st.caption(f"🖥️ Local Enhanced OCR ({LOCAL_ENHANCED_OCR_VERSION}): **available** ✅")
+        elif local_ok and local_missing:
+            st.caption(
+                f"🖥️ Local Enhanced OCR ({LOCAL_ENHANCED_OCR_VERSION}): **partial** ⚠️ "
+                f"(missing `{', '.join(local_missing)}` — fast path only, no check linking)"
+            )
+        else:
+            st.caption(f"🖥️ Local Enhanced OCR ({LOCAL_ENHANCED_OCR_VERSION}): **unavailable**")
+            st.caption(
+                "  ↳ `pip install pdfplumber pdf2image easyocr pillow opencv-python-headless numpy`"
+            )
+
+        # v2.44 — surface the Codespaces runtime + active OCR DPIs so Robert
+        # can confirm at a glance whether the smaller Codespaces defaults
+        # (200/180) or his Windows-local defaults (300/250) are in effect.
+        if os.environ.get("CODESPACES", "").lower() == "true":
+            cs_name = os.environ.get("CODESPACE_NAME", "")
+            suffix = f" · `{cs_name}`" if cs_name else ""
+            st.caption(f"☁️ Runtime: **GitHub Codespaces**{suffix}")
+            try:
+                from local_enhanced_ocr import environment_summary
+
+                summary = environment_summary()
+                st.caption(
+                    f"  ↳ OCR DPI text=**{summary['dpi_text']}** / crop=**{summary['dpi_crop']}**"
+                    f" · max pages=**{summary['max_pages_raster']}**"
+                )
+            except Exception:
+                pass
+
         for hint in get_operational_hints(data_source=DATA_SOURCE, db_health=DB_HEALTH):
             st.caption(f"• {hint}")
 

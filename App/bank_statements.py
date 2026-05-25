@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
+import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -1317,12 +1321,16 @@ def load_grok_vision_csv(
 
 
 __all__ = [
+    "AZURE_OCR_FUNCTION_KEY_ENV",
+    "AZURE_OCR_FUNCTION_URL_ENV",
+    "AZURE_OCR_TIMEOUT_SEC",
     "CROPPED_CHECKS_DIR",
     "CROPPER_SKIP_USER_MSG",
     "GROK_CSV_COLUMNS",
     "GROK_CSV_FIELDS",
     "GROK_REQUIRED_COLUMNS",
     "GROK_VISION_HINT",
+    "LOCAL_ENHANCED_OCR_VERSION",
     "PAYEE_RULES_COLUMNS",
     "PAYEE_RULES_FILENAME",
     "PIVOT_GROUP_BY_OPTIONS",
@@ -1331,6 +1339,8 @@ __all__ = [
     "UPLOAD_WORK_DIR",
     "ZERO_TRANSACTIONS_MSG",
     "apply_payee_rules",
+    "azure_ocr_configured",
+    "azure_ocr_status",
     "build_grok_vision_prompt",
     "build_statement_pivot",
     "confidence_review_count",
@@ -1342,10 +1352,13 @@ __all__ = [
     "format_processing_log",
     "load_grok_vision_csv",
     "load_payee_rules",
+    "local_enhanced_ocr_available",
     "missing_document_counts",
     "reconcile_statement_totals",
     "resolve_payee_rules_path",
     "rules_library_summary",
+    "run_azure_ocr_pipeline",
+    "run_local_enhanced_ocr_pipeline",
     "run_statement_pipeline",
     "save_payee_rules",
     "scripts_available",
@@ -1642,6 +1655,541 @@ def reconcile_statement_totals(df: pd.DataFrame, grok_totals: dict | None = None
         "computed": computed,
         "reported": dict(grok_totals),
     }
+
+
+# ---------------------------------------------------------------------------
+# Azure OCR Function client (v2.41) — Strategic Next Milestone from Section 8.1
+# ---------------------------------------------------------------------------
+# Calls the dedicated `slam-ocr-function` Azure Function over HTTPS so heavy
+# OCR / check-cropping stays off the Streamlit App Service. The wire format is
+# documented in `AzureFunctions/ocr_processor/function_app.py`. Failures are
+# always non-fatal — callers fall back to the existing lightweight parser or
+# the Grok CSV paste path so Laura's daily workflow never gets blocked by an
+# infrastructure hiccup.
+
+AZURE_OCR_FUNCTION_URL_ENV = "AZURE_OCR_FUNCTION_URL"
+AZURE_OCR_FUNCTION_KEY_ENV = "AZURE_OCR_FUNCTION_KEY"
+AZURE_OCR_TIMEOUT_SEC = 180
+
+
+def azure_ocr_configured() -> bool:
+    """Return True when both the Function URL and key env vars are set."""
+
+    url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
+    key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    return bool(url) and bool(key)
+
+
+def azure_ocr_status() -> dict[str, Any]:
+    """Snapshot for the sidebar status indicator (no network call).
+
+    Returns ``{configured, url, has_key, hint}`` so the sidebar can render
+    "Azure OCR · configured" vs. "Azure OCR · not configured (set
+    `AZURE_OCR_FUNCTION_URL` + `AZURE_OCR_FUNCTION_KEY`)".
+    """
+
+    url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
+    key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    return {
+        "configured": bool(url) and bool(key),
+        "url": url,
+        "has_key": bool(key),
+        "hint": (
+            f"Set `{AZURE_OCR_FUNCTION_URL_ENV}` and `{AZURE_OCR_FUNCTION_KEY_ENV}` "
+            "App Settings on the Streamlit App Service to enable the heavy-OCR path."
+        ),
+    }
+
+
+def _build_ocr_request_body(
+    pdf_bytes: bytes,
+    pdf_filename: str,
+    client_name: str,
+) -> tuple[bytes, str]:
+    """Encode the OCR request as JSON with a base64 PDF payload.
+
+    Using JSON (instead of multipart) keeps the client self-contained — no
+    third-party `requests` / `requests-toolbelt` dependency on the App Service.
+    For large PDFs the base64 overhead is acceptable on the Streamlit side; we
+    can switch to multipart later if statements ever exceed ~30 MiB.
+    """
+
+    payload = {
+        "pdf_b64": base64.b64encode(pdf_bytes or b"").decode("ascii"),
+        "filename": pdf_filename or "statement.pdf",
+        "client": client_name or "",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    return body, "application/json"
+
+
+def _parse_ocr_response_to_df(payload: dict[str, Any]) -> pd.DataFrame:
+    """Convert the Function's `transactions` list into the canonical 12-col DataFrame."""
+
+    txns = payload.get("transactions") or []
+    if not isinstance(txns, list) or not txns:
+        return pd.DataFrame(columns=list(GROK_CSV_COLUMNS))
+
+    df = pd.DataFrame(txns)
+    for col in GROK_CSV_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Normalize numeric columns; matches the Grok CSV paste path.
+    df["Amount"] = _coerce_amount_series(df["Amount"])
+    signed_raw = df["SignedAmount"].astype(str).str.strip()
+    signed_numeric = _coerce_amount_series(df["SignedAmount"])
+    df["SignedAmount"] = signed_numeric.where(signed_raw != "", df["Amount"])
+
+    # Date / YearMonth normalization (best-effort — the Function returns ISO already).
+    df["Date"] = df["Date"].astype(str).str.strip()
+    ym = df["YearMonth"].astype(str).str.strip()
+    parsed_dates = pd.to_datetime(df["Date"], errors="coerce")
+    derived_ym = parsed_dates.dt.strftime("%Y-%m").fillna("")
+    df["YearMonth"] = ym.where(ym != "", derived_ym)
+
+    df["Confidence"] = df["Confidence"].astype(str).str.strip().str.title().replace("", "Medium")
+    df["NeedsReview"] = _coerce_yes_no(df["NeedsReview"].astype(str))
+    df["Category"] = df["Category"].astype(str).str.strip().replace("", "Uncategorized")
+
+    extras = [c for c in df.columns if c not in GROK_CSV_COLUMNS]
+    return df[list(GROK_CSV_COLUMNS) + extras].reset_index(drop=True)
+
+
+def run_azure_ocr_pipeline(
+    pdf_bytes: bytes,
+    pdf_filename: str,
+    client_name: str,
+    logger,
+    *,
+    timeout_sec: int = AZURE_OCR_TIMEOUT_SEC,
+) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
+    """Call the Azure OCR Function and return ``(df, logs, meta)``.
+
+    Behavior mirrors :func:`run_statement_pipeline` so the Bank Statements page
+    can swap implementations on a single radio toggle:
+
+    - ``df`` is the canonical 12-column DataFrame (or ``None`` on error).
+    - ``logs`` is a list of structured ``[LEVEL] message`` strings ready for
+      the Processing log expander.
+    - ``meta`` mirrors the parser meta: ``status`` (``success`` / ``partial``
+      / ``error``), ``transaction_count``, ``grok_totals`` (so the
+      reconciliation banner can fire), ``request_id``, ``service_version``,
+      ``message``, ``configured``.
+
+    Failures (missing config, HTTP error, timeout, malformed JSON) never
+    raise — the caller can show a friendly "Azure OCR unavailable, falling
+    back to the lightweight parser" message and continue.
+    """
+
+    logs: list[str] = []
+    meta: dict[str, Any] = {
+        "status": "error",
+        "transaction_count": 0,
+        "grok_totals": None,
+        "request_id": None,
+        "service_version": None,
+        "message": "",
+        "configured": False,
+        "csv_path": None,
+        "pdf_path": None,
+    }
+
+    url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
+    key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    if not url or not key:
+        logs.append(
+            _log(
+                "warn",
+                "Azure OCR not configured — set `AZURE_OCR_FUNCTION_URL` + "
+                "`AZURE_OCR_FUNCTION_KEY` App Settings to enable the heavy-OCR path.",
+            )
+        )
+        meta["message"] = "Azure OCR Function URL/key not configured."
+        if logger is not None:
+            log_event(logger, "bank_stmt_azure_ocr_not_configured", client=client_name)
+        return None, logs, meta
+
+    meta["configured"] = True
+
+    if not pdf_bytes:
+        logs.append(_log("error", "Empty PDF payload — nothing to send to the Azure OCR Function."))
+        meta["message"] = "Empty PDF payload."
+        return None, logs, meta
+
+    body, content_type = _build_ocr_request_body(pdf_bytes, pdf_filename, client_name)
+
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": content_type,
+            "x-functions-key": key,
+            "Accept": "application/json",
+        },
+    )
+
+    logs.append(
+        _log(
+            "info",
+            f"Calling Azure OCR Function ({len(body) / 1024:.1f} KiB body) "
+            f"with timeout={timeout_sec}s...",
+        )
+    )
+    if logger is not None:
+        log_event(
+            logger,
+            "bank_stmt_azure_ocr_request",
+            client=client_name,
+            filename=pdf_filename,
+            bytes=len(pdf_bytes),
+        )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as resp:
+            raw = resp.read()
+            status_code = resp.status
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        logs.append(
+            _log("error", f"Azure OCR Function returned HTTP {exc.code} {exc.reason}: {body_text}")
+        )
+        meta["message"] = f"HTTP {exc.code} {exc.reason}"
+        if logger is not None:
+            log_event(
+                logger,
+                "bank_stmt_azure_ocr_http_error",
+                client=client_name,
+                code=exc.code,
+                reason=str(exc.reason)[:200],
+            )
+        return None, logs, meta
+    except urllib.error.URLError as exc:
+        logs.append(_log("error", f"Could not reach Azure OCR Function: {exc.reason}"))
+        meta["message"] = f"Network error: {exc.reason}"
+        if logger is not None:
+            log_event(
+                logger,
+                "bank_stmt_azure_ocr_network_error",
+                client=client_name,
+                error=str(exc.reason)[:200],
+            )
+        return None, logs, meta
+    except TimeoutError as exc:
+        logs.append(_log("error", f"Azure OCR Function timed out after {timeout_sec}s: {exc}"))
+        meta["message"] = f"Timed out after {timeout_sec}s"
+        if logger is not None:
+            log_event(
+                logger, "bank_stmt_azure_ocr_timeout", client=client_name, seconds=timeout_sec
+            )
+        return None, logs, meta
+    except Exception as exc:  # noqa: BLE001 — function boundary; surface as user-friendly error
+        logs.append(_log("error", f"Unexpected error calling Azure OCR Function: {exc}"))
+        meta["message"] = f"Unexpected error: {exc}"
+        if logger is not None:
+            log_event(logger, "bank_stmt_azure_ocr_unexpected_error", error=str(exc)[:200])
+        return None, logs, meta
+
+    if status_code != 200:
+        logs.append(_log("error", f"Azure OCR Function returned non-200 status {status_code}."))
+        meta["message"] = f"Non-200 status {status_code}"
+        return None, logs, meta
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logs.append(_log("error", f"Azure OCR Function returned non-JSON body: {exc}"))
+        meta["message"] = f"Malformed JSON: {exc}"
+        return None, logs, meta
+
+    meta["service_version"] = payload.get("version")
+    meta["request_id"] = payload.get("request_id")
+    meta["status"] = str(payload.get("status") or "partial")
+    meta["message"] = str(payload.get("message") or "")
+    meta["grok_totals"] = payload.get("grok_totals")
+
+    server_logs = payload.get("logs") or []
+    if isinstance(server_logs, list):
+        for line in server_logs:
+            logs.append(str(line))
+
+    df = _parse_ocr_response_to_df(payload)
+    meta["transaction_count"] = int(len(df))
+
+    if df.empty:
+        logs.append(_log("warn", "Azure OCR Function returned zero transactions."))
+        if meta["status"] == "success":
+            meta["status"] = "partial"
+    else:
+        logs.append(_log("ok", f"Azure OCR Function returned {len(df)} transaction(s)."))
+
+    if logger is not None:
+        log_event(
+            logger,
+            "bank_stmt_azure_ocr_response",
+            client=client_name,
+            rows=int(len(df)),
+            status=meta["status"],
+            service_version=str(meta["service_version"] or ""),
+        )
+
+    return df, logs, meta
+
+
+# ---------------------------------------------------------------------------
+# Local Enhanced OCR pipeline (v2.43.2) — local-first port of v2.43
+# ---------------------------------------------------------------------------
+# In-process version of the Azure Function's v2.43 pipeline for Robert's local
+# development environment while the heavy Function deploy (easyocr + torch on
+# Y1 Consumption) remains parked behind an infra decision. The pipeline code
+# lives in `App/local_enhanced_ocr.py` so this module stays focused on the
+# Streamlit-facing entry points (parser subprocess, Grok CSV paste, Azure OCR
+# Function client, and now the local enhanced runner). Heavy libraries are
+# imported lazily inside the pipeline stages so the module remains importable
+# in trimmed-down deploys.
+
+LOCAL_ENHANCED_OCR_VERSION = "v2.43.2"
+
+# Subset of capabilities the pipeline absolutely needs before it's worth even
+# attempting (no point spinning up easyocr if pdfplumber + pillow + numpy are
+# missing — the fast path can't even open the PDF). The full check-linking
+# path additionally needs opencv + pdf2image + easyocr; when those are
+# missing the run still produces transactions, but the cropper / matcher
+# stages degrade gracefully with [WARN] lines in the processing log.
+_LOCAL_OCR_MINIMUM_CAPS: tuple[str, ...] = ("pdfplumber",)
+_LOCAL_OCR_FULL_CAPS: tuple[str, ...] = (
+    "pdfplumber",
+    "pdf2image",
+    "easyocr",
+    "opencv",
+    "pillow",
+    "numpy",
+)
+
+
+def local_enhanced_ocr_available() -> tuple[bool, dict[str, bool], list[str]]:
+    """Report whether the local enhanced OCR pipeline can run in this environment.
+
+    Returns ``(available, capabilities, missing)`` where:
+    - ``available`` is True when at least the fast path (pdfplumber) is
+      importable. Missing optional libraries reduce the pipeline gracefully:
+      no opencv/easyocr → no check cropping, no easyocr/pdf2image →
+      pdfplumber-only.
+    - ``capabilities`` mirrors :func:`local_enhanced_ocr.detect_capabilities`.
+    - ``missing`` lists the names of optional libraries needed for the full
+      v2.43 check-linking experience that are NOT importable. Empty list when
+      everything is installed.
+
+    The Streamlit Bank Statements page uses this to show a clear "missing
+    libs" warning and fall back to the Lightweight Parser instead of letting
+    the pipeline silently degrade to a 0-row result.
+    """
+
+    try:
+        import local_enhanced_ocr  # noqa: PLC0415
+
+        caps = local_enhanced_ocr.detect_capabilities()
+    except Exception:
+        return False, {}, list(_LOCAL_OCR_FULL_CAPS)
+
+    available = all(caps.get(name, False) for name in _LOCAL_OCR_MINIMUM_CAPS)
+    missing = [name for name in _LOCAL_OCR_FULL_CAPS if not caps.get(name, False)]
+    return available, caps, missing
+
+
+def run_local_enhanced_ocr_pipeline(
+    pdf_bytes: bytes,
+    pdf_filename: str,
+    client_name: str,
+    logger,
+) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
+    """Run the v2.43 OCR pipeline locally (no Azure Function call).
+
+    Behavior mirrors :func:`run_azure_ocr_pipeline` so the Bank Statements
+    page can swap implementations on a single radio toggle:
+
+    - ``df`` is the canonical 12-column DataFrame (or ``None`` on error /
+      when the heavy libs are not installed).
+    - ``logs`` is the same ``[LEVEL] message`` list ready for the Processing
+      log expander — every pipeline stage transition, check-linking decision,
+      and missing-library warning surfaces here.
+    - ``meta`` mirrors the Azure path: ``status`` (``success`` / ``partial``
+      / ``error``), ``transaction_count``, ``grok_totals`` (so the
+      reconciliation banner fires automatically), ``service_version`` (set
+      to :data:`LOCAL_ENHANCED_OCR_VERSION`), ``message``, ``configured``,
+      plus a ``cropped_checks`` list and a ``linked_count`` summary so the
+      UI can surface "Linked X check(s) to transactions" alongside the
+      existing transaction count metric.
+
+    Failures (missing libs, malformed PDF, OCR engine crash) never raise —
+    the caller can show a friendly "Local Enhanced OCR unavailable, falling
+    back to the Lightweight Parser" message and continue.
+    """
+
+    logs: list[str] = []
+    meta: dict[str, Any] = {
+        "status": "error",
+        "transaction_count": 0,
+        "grok_totals": None,
+        "service_version": LOCAL_ENHANCED_OCR_VERSION,
+        "message": "",
+        "configured": False,
+        "cropped_checks": [],
+        "linked_count": 0,
+        "capabilities": {},
+        "missing_capabilities": [],
+        "csv_path": None,
+        "pdf_path": None,
+    }
+
+    available, caps, missing = local_enhanced_ocr_available()
+    meta["capabilities"] = caps
+    meta["missing_capabilities"] = missing
+
+    if not available:
+        logs.append(
+            _log(
+                "warn",
+                "Local Enhanced OCR unavailable — required library not importable "
+                f"(missing: {', '.join(missing) or 'unknown'}). "
+                "Install the AzureFunctions requirements locally: "
+                "`pip install pdfplumber pdf2image easyocr pillow opencv-python-headless numpy`.",
+            )
+        )
+        meta["message"] = "Local Enhanced OCR not available in this environment."
+        if logger is not None:
+            log_event(
+                logger,
+                "bank_stmt_local_ocr_unavailable",
+                client=client_name,
+                missing=",".join(missing)[:200],
+            )
+        return None, logs, meta
+
+    meta["configured"] = True
+
+    if not pdf_bytes:
+        logs.append(_log("error", "Empty PDF payload — nothing to send to Local Enhanced OCR."))
+        meta["message"] = "Empty PDF payload."
+        return None, logs, meta
+
+    if missing:
+        logs.append(
+            _log(
+                "warn",
+                f"Local Enhanced OCR running with reduced capabilities — missing: "
+                f"{', '.join(missing)}. Fast-path transactions will still be extracted, "
+                "but check cropping and check-to-transaction linking will be skipped.",
+            )
+        )
+
+    logs.append(
+        _log(
+            "info",
+            f"Local Enhanced OCR ({LOCAL_ENHANCED_OCR_VERSION}) processing "
+            f"{pdf_filename!r} for client {client_name!r} "
+            f"({len(pdf_bytes) / 1024:.1f} KiB)...",
+        )
+    )
+    if logger is not None:
+        log_event(
+            logger,
+            "bank_stmt_local_ocr_request",
+            client=client_name,
+            filename=pdf_filename,
+            bytes=len(pdf_bytes),
+        )
+
+    try:
+        import local_enhanced_ocr  # noqa: PLC0415
+
+        result = local_enhanced_ocr.run_pipeline(pdf_bytes)
+    except Exception as exc:  # noqa: BLE001 — function boundary; never crash UI
+        logs.append(_log("error", f"Local Enhanced OCR pipeline crashed: {exc}"))
+        meta["message"] = f"Local Enhanced OCR pipeline crashed: {exc}"
+        if logger is not None:
+            log_event(logger, "bank_stmt_local_ocr_error", error=str(exc)[:200])
+        return None, logs, meta
+
+    pipeline_logs = result.get("logs") or []
+    if isinstance(pipeline_logs, list):
+        logs.extend(str(line) for line in pipeline_logs)
+
+    meta["status"] = str(result.get("status") or "partial")
+    meta["message"] = str(result.get("message") or "")
+    meta["grok_totals"] = result.get("grok_totals")
+    meta["cropped_checks"] = result.get("cropped_checks") or []
+    meta["linked_count"] = int(result.get("linked_count") or 0)
+
+    df = _txn_list_to_df(result.get("transactions") or [])
+    meta["transaction_count"] = int(len(df))
+
+    if df.empty:
+        logs.append(_log("warn", "Local Enhanced OCR returned zero transactions."))
+        if meta["status"] == "success":
+            meta["status"] = "partial"
+    else:
+        logs.append(
+            _log(
+                "ok",
+                f"Local Enhanced OCR returned {len(df)} transaction(s); "
+                f"linked {meta['linked_count']} cropped check(s) to transactions.",
+            )
+        )
+
+    if logger is not None:
+        log_event(
+            logger,
+            "bank_stmt_local_ocr_response",
+            client=client_name,
+            rows=int(len(df)),
+            cropped=int(len(meta["cropped_checks"])),
+            linked=meta["linked_count"],
+            status=meta["status"],
+            service_version=str(meta["service_version"] or ""),
+        )
+
+    return df, logs, meta
+
+
+def _txn_list_to_df(transactions: list[dict]) -> pd.DataFrame:
+    """Convert a list of canonical transaction dicts into the 12-column DataFrame.
+
+    Mirrors :func:`_parse_ocr_response_to_df` so the local pipeline output
+    flows through the existing review UI / reconciliation banner / payee
+    rules engine identically to the Azure Function path.
+    """
+
+    if not transactions:
+        return pd.DataFrame(columns=list(GROK_CSV_COLUMNS))
+
+    df = pd.DataFrame(transactions)
+    for col in GROK_CSV_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["Amount"] = _coerce_amount_series(df["Amount"])
+    signed_raw = df["SignedAmount"].astype(str).str.strip()
+    signed_numeric = _coerce_amount_series(df["SignedAmount"])
+    df["SignedAmount"] = signed_numeric.where(signed_raw != "", df["Amount"])
+
+    df["Date"] = df["Date"].astype(str).str.strip()
+    ym = df["YearMonth"].astype(str).str.strip()
+    parsed_dates = pd.to_datetime(df["Date"], errors="coerce")
+    derived_ym = parsed_dates.dt.strftime("%Y-%m").fillna("")
+    df["YearMonth"] = ym.where(ym != "", derived_ym)
+
+    df["Confidence"] = df["Confidence"].astype(str).str.strip().str.title().replace("", "Medium")
+    df["NeedsReview"] = _coerce_yes_no(df["NeedsReview"].astype(str))
+    df["Category"] = df["Category"].astype(str).str.strip().replace("", "Uncategorized")
+
+    extras = [c for c in df.columns if c not in GROK_CSV_COLUMNS]
+    return df[list(GROK_CSV_COLUMNS) + extras].reset_index(drop=True)
 
 
 def missing_document_counts(req_df: pd.DataFrame) -> dict[str, int]:
