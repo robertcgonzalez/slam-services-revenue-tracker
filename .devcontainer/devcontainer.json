@@ -12,25 +12,27 @@
 {
   "name": "SLAM Services — Python 3.10 + Local Enhanced OCR (v2.44)",
 
-  // Microsoft-maintained Python 3.10 dev container on Debian Bookworm.
-  // Matches `runtime.txt` (python-3.10) and `pyproject.toml`
-  // (requires-python = ">=3.10,<3.11") so dev parity with the live
-  // F1 App Service is guaranteed.
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.10-bookworm",
+  // Custom Dockerfile layered on the Microsoft Python 3.10 dev container
+  // image. The Dockerfile (a) removes the broken third-party Yarn apt
+  // source whose stale GPG key (NO_PUBKEY 62D54FD4003F6525) breaks the
+  // `ghcr.io/devcontainers/features/sshd:1` install during container
+  // build (observed in v2.44.1), and (b) installs openssh-server +
+  // poppler-utils + libgl1 + libglib2.0-0 at image-build time so the
+  // Codespace boots faster and `gh codespace ssh` / `gh codespace cp`
+  // work out of the box. Matches Azure F1 App Service runtime
+  // (Python 3.10 on Debian Bookworm).
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
 
   // Pre-installed dev container "features" layered on top of the base
   // image. github-cli is useful for `gh pr create` / `gh issue list`
-  // workflows from inside the Codespace. sshd enables `gh codespace ssh`
-  // / `gh codespace cp` from a developer's local terminal — important
-  // for the v2.44 verification flow where the local PDF test fixture
-  // (`Data/Auto_Body_Center_Jan_26_Statement.pdf`) is gitignored and
-  // must be `scp`-copied into the Codespace before the Local Enhanced
-  // OCR pipeline can be exercised end-to-end.
+  // workflows from inside the Codespace. sshd is now installed via the
+  // Dockerfile (v2.44.2) instead of the `sshd` feature, because the
+  // feature's `apt-get update` step trips over the stale Yarn GPG key
+  // baked into the upstream Microsoft base image.
   "features": {
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/sshd:1": {
-      "version": "latest"
-    }
+    "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
   // Codespaces machine sizing — the heavy OCR pipeline (easyocr pulls
