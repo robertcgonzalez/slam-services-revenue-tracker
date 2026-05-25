@@ -7,12 +7,13 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ---
 
-## 📌 Current Status (as of May 24, 2026 — Blueprint v2.34)
+## 📌 Current Status (as of May 25, 2026 — Blueprint v2.39)
 
 - **Phase 1** — Revenue Reporting Tracker: **Complete**
-- **Phase 2** — Secure Azure Deployment: **Complete** (F1 tier)
+- **Phase 2** — Secure Azure Deployment: **Complete** (F1 tier; modern polling-safe deploy path v2.38.3)
 - **Phase 2.5** — Stabilization (P0–P2): **Complete in app**
-- **Bank Statements MVP (v2.34)** — Upload PDF → process → review transactions → Mark as Received (Core Workstream #2)
+- **Bank Statements** — Upload PDF → parser pipeline OR paste Grok CSV → automated reconciliation check → **persistent payee rules engine** (v2.39) → review → Mark as Received (Core Workstream #2)
+- **Payee rules engine (v2.39)** — `Data/payee_rules.csv` auto-applies on every statement, with **💡 Learn this mapping** to teach new rules (Quick Parallel Win delivered from Blueprint §8.1)
 - **UAT (v2.32)** — Laura/Stef user acceptance testing; unsaved-change guards, new quick views, ops health script
 - **Daily driver (v2.31)** — Dashboard briefing, quick filters, help panel, logging, CSV/DB freshness
 - **P0 Azure CSV path (v2.26)** — **Fixed and live** (manual zip deploy confirmed)
@@ -27,30 +28,97 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ---
 
-## Azure deployment (v2.26)
+## Azure deployment (v2.38.3 — modern, polling-safe; carried into v2.39)
 
 Client CSVs are **not in git**. Choose one:
 
-### A. Manual flat zip (recommended when restoring Data)
+### A. Modern recommended path — `Deploy-ToAzure.ps1` (build + safe deploy)
 
 ```powershell
 cd C:\SLAM-Services-Project
 .\Scripts\PowerShell\Build-AzureDeployZip.ps1
-az webapp deployment source config-zip `
-  -g SLAM-Services-RG `
-  -n slam-services-revenue-tracker `
-  --src slam-app.zip
+.\Scripts\PowerShell\Deploy-ToAzure.ps1
 ```
 
-Zip root must contain: `requirements.txt`, `App/`, `Data/Revenue_Tracker_Migration/`, `startup.sh`, `runtime.txt`.
+What `Deploy-ToAzure.ps1` does (replaces the legacy `config-zip` + raw `webapp deploy` flow):
 
-### B. GitHub Actions (code-only; preserves existing Data)
+1. Pre-flight checks (login, web app exists, zip exists).
+2. Removes `WEBSITE_RUN_FROM_PACKAGE` if present (silently breaks OneDeploy zip uploads when set).
+3. **Stops** the web app to release Kudu and clear any stuck deploy lock from a prior failed attempt.
+4. Uploads via `az webapp deploy --type zip --async true` — returns immediately, so there is no long-lived HTTPS polling connection that the App Service front-end LB can drop at ~230 s (root cause of `RemoteDisconnected('Remote end closed connection without response')` on F1 tier).
+5. Polls `az webapp deployment list` server-side until a terminal status (0 Success / 3 Failed / 5 Partial).
+6. **Starts** the web app and runs an HTTP smoke test against the live URL.
+
+Zip root must contain: `requirements.txt`, `App/`, `Data/Revenue_Tracker_Migration/`, `startup.sh`, `runtime.txt`, `Scripts/`.
+
+### B. Manual one-shot (when you need full control)
+
+```powershell
+cd C:\SLAM-Services-Project
+.\Scripts\PowerShell\Build-AzureDeployZip.ps1
+
+az webapp stop -g SLAM-Services-RG -n slam-services-revenue-tracker
+
+az webapp config appsettings delete `
+  -g SLAM-Services-RG -n slam-services-revenue-tracker `
+  --setting-names WEBSITE_RUN_FROM_PACKAGE
+
+az webapp deploy `
+  -g SLAM-Services-RG -n slam-services-revenue-tracker `
+  --src-path slam-app.zip --type zip --async true
+
+az webapp deployment list `
+  -g SLAM-Services-RG -n slam-services-revenue-tracker `
+  --query "[0].{status:status,message:message,complete:complete}" -o table
+
+az webapp start -g SLAM-Services-RG -n slam-services-revenue-tracker
+```
+
+> **Do not use the legacy** `az webapp deployment source config-zip` — it prints a deprecation warning and uses the older synchronous endpoint that is also vulnerable to the same 230-second LB timeout.
+
+### C. GitHub Actions (code-only; preserves existing Data)
 
 Push to `main` with `AZUREAPPSERVICEPUBLISHPROFILE` set. Workflow uses `clean: false` so an existing `Data/` folder on the App Service is not deleted.
 
-### C. Kudu upload
+### D. Kudu upload (Data only)
 
 Upload `Data/Revenue_Tracker_Migration/` to `/home/site/wwwroot/Data/Revenue_Tracker_Migration/` (Advanced Tools → Kudu → Debug console).
+
+### Recovery — when a deploy hangs or returns `RemoteDisconnected`
+
+Symptoms: `az webapp deploy` hangs at *"Warming up Kudu before deployment"*, then errors with `('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))`, and the live URL shows `Connection timed out`.
+
+Root cause (typical on F1): the CLI's `_make_onedeploy_request` keeps a long HTTPS connection open while polling Kudu; the App Service front-end load balancer kills any idle TCP connection at ~230 s. Meanwhile the OneDeploy job is often still alive on the server, so retrying immediately can collide with a stale deploy lock.
+
+Run these in order — each is idempotent and safe:
+
+```powershell
+# 1. Stop the app (releases Kudu, kills any in-flight deploy handler)
+az webapp stop -g SLAM-Services-RG -n slam-services-revenue-tracker
+
+# 2. Remove the #1 silent killer of zip deploys (no-op if already gone)
+az webapp config appsettings delete `
+  -g SLAM-Services-RG -n slam-services-revenue-tracker `
+  --setting-names WEBSITE_RUN_FROM_PACKAGE
+
+# 3. Confirm no deployment is currently in-flight on the server
+az webapp deployment list `
+  -g SLAM-Services-RG -n slam-services-revenue-tracker `
+  --query "[0].{status:status,complete:complete,message:message}" -o table
+
+# 4. Re-run the safe modern deploy
+.\Scripts\PowerShell\Deploy-ToAzure.ps1
+```
+
+If step 3 reports a deployment with `complete: false` for more than ~5 minutes after step 1, restart Kudu specifically:
+
+```powershell
+az resource invoke-action `
+  --resource-group SLAM-Services-RG `
+  --name "slam-services-revenue-tracker/scm" `
+  --resource-type Microsoft.Web/sites/host `
+  --action restart --api-version 2022-03-01
+```
 
 ### Optional App Settings
 
@@ -87,26 +155,39 @@ Upload `Data/Revenue_Tracker_Migration/` to `/home/site/wwwroot/Data/Revenue_Tra
 cd C:\SLAM-Services-Project
 .\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure
 .\Scripts\PowerShell\Build-AzureDeployZip.ps1
-az webapp deployment source config-zip -g SLAM-Services-RG -n slam-services-revenue-tracker --src slam-app.zip
+.\Scripts\PowerShell\Deploy-ToAzure.ps1
 ```
 
 Verify Azure App Settings: `SLAM_APP_PASSWORD`, `SLAM_APP_USER=Laura` (or Stef).
 
 ---
 
-## Daily driver tips (v2.32)
+## Daily driver tips (v2.39)
 
 | For | Do this |
 |-----|---------|
-| Laura / Stef | **Dashboard** → Today's priority → **Bank Statements** (PDF pipeline) → **Missing Docs** / **Revenue Requests** → **Save** |
+| Laura / Stef | **Dashboard** → Today's priority → **Bank Statements** (PDF pipeline OR paste Grok CSV) → review auto-applied **payee rules** → use **💡 Learn this mapping** to teach new ones → **Missing Docs** / **Revenue Requests** → **Save** |
+| Laura (rules engine) | After import, look for the green **🧠 X payee mapping(s) applied** callout. Click **🔄 Apply Payee Rules** any time to re-clean the table; use **💡 Learn this mapping** to add a new rule from any row (saves to `Data/payee_rules.csv`). |
 | Robert (CSV updated) | `.\Scripts\PowerShell\Sync-DataRefresh.ps1` to push CSV changes into PostgreSQL |
 | Robert (pre-UAT) | `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` |
-| Robert (deploy) | `.\Scripts\PowerShell\Build-AzureDeployZip.ps1` then `az webapp deployment source config-zip` |
+| Robert (deploy) | `.\Scripts\PowerShell\Build-AzureDeployZip.ps1` then `.\Scripts\PowerShell\Deploy-ToAzure.ps1` |
+| Robert (payee rules) | `Data/payee_rules.csv` is gitignored — open it directly to bulk-edit seed rules, or set `SLAM_PAYEE_RULES_PATH` to point at a shared file (e.g. on Azure: `/home/site/wwwroot/Data/payee_rules.csv`). |
 | Health (CSV mode) | `python Scripts/health_check.py --csv` |
 | Health (Postgres) | `python Scripts/health_check.py` |
 | Health (both) | `python Scripts/health_check.py --full` |
 
 Set `SLAM_APP_USER=Laura` (or Stef) in Azure App Settings so saves and sidebar show the correct name.
+
+### Bank Statements workflow (v2.39 quick reference)
+
+1. **Choose client** + upload PDF(s) → **Process Statement** (parser pipeline)
+   - …or paste Grok Vision CSV under **📋 Option 2** (image-only / scanned statements)
+2. Review the **automated reconciliation banner** — green ✅ when detail totals match the bank's TOTALS line, red ⚠️ when they don't (the whole statement flags for review)
+3. Check the **🧠 X payee mapping(s) applied** callout — `Data/payee_rules.csv` auto-cleaned merchants like `WAL-MART STORE #1234` → `Walmart` / `Supplies`
+4. Use **💡 Learn this mapping** to teach a new rule for anything still messy — pick the row, edit pattern + clean Payee + Category, optionally scope to this client, **Save mapping**. The rule is reapplied immediately and persists across future statements.
+5. Edit any remaining rows manually in the data editor (rules engine never overwrites your manual edits on re-apply)
+6. **Download transactions CSV** for Power Query / `Process-Statement.ps1` (column order unchanged)
+7. **Link to revenue request** → **Mark as Received**
 
 ---
 
@@ -329,7 +410,8 @@ When starting a new session in Cursor, begin with:
 - `Scripts/health_check.py` — PostgreSQL + `--csv` + `--full` health check
 - `Scripts/PowerShell/Check-AppHealth.ps1` — Pre-UAT / post-deploy validation
 - `Scripts/PowerShell/Sync-DataRefresh.ps1` — CSV → PostgreSQL refresh (idempotent)
-- `Scripts/PowerShell/Deploy-PostgresProduction.ps1` — Build + deploy helper
+- `Scripts/PowerShell/Deploy-ToAzure.ps1` — **Modern polling-safe deploy** (stop → async OneDeploy → poll → start → smoke test)
+- `Scripts/PowerShell/Deploy-PostgresProduction.ps1` — Build + deploy helper (calls `Deploy-ToAzure.ps1`)
 - `App/diagnostics.py` — Data freshness + system info for sidebar
 - `App/app_logging.py` — Structured `slam_app` logs (Azure log stream)
 - `Scripts/PowerShell/Set-AzurePostgresAppSettings.ps1` — Enable/disable Postgres settings

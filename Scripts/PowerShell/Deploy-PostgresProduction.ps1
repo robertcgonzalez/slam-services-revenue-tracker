@@ -48,11 +48,11 @@ if ($SkipDeploy) {
     exit 0
 }
 
-Write-Host "=== Step 3: Deploy to Azure ==="
-az webapp deployment source config-zip `
-    -g $ResourceGroup `
-    -n $WebAppName `
-    --src (Join-Path $RepoRoot $ZipName)
+Write-Host "=== Step 3: Deploy to Azure (modern polling-safe path) ==="
+& (Join-Path $PSScriptRoot "Deploy-ToAzure.ps1") `
+    -ResourceGroup $ResourceGroup `
+    -WebAppName $WebAppName `
+    -ZipPath (Join-Path $RepoRoot $ZipName)
 
 Write-Host "=== Done ==="
 Write-Host "Verify: https://${WebAppName}.azurewebsites.net/"

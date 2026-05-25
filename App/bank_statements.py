@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -67,6 +68,324 @@ GROK_CSV_COLUMNS: tuple[str, ...] = (
 
 # Minimum columns Grok must produce for us to consider the paste/upload valid.
 GROK_REQUIRED_COLUMNS: tuple[str, ...] = ("Date", "Description", "Amount")
+
+
+# ---------------------------------------------------------------------------
+# Persistent payee rules engine (v2.39) — Quick Parallel Win from Section 8.1
+# ---------------------------------------------------------------------------
+# Lightweight, QuickBooks-style mapping that learns from real usage. Rules live
+# in `Data/payee_rules.csv` (gitignored) with the columns below. Matching is
+# case-insensitive substring on the transaction Description, with optional full
+# regex via a `re:` prefix on the pattern. Client-specific overrides win over
+# global rules; on tie, the longest pattern wins. The engine is intentionally
+# small (pandas + re only), defensive (missing file → no-op), and never
+# overwrites a manually-curated Payee — only blanks or the raw description.
+
+PAYEE_RULES_COLUMNS: tuple[str, ...] = (
+    "pattern",
+    "clean_payee",
+    "suggested_category",
+    "client_override",
+    "notes",
+    "last_used",
+)
+
+PAYEE_RULES_FILENAME = "payee_rules.csv"
+
+
+def _payee_rules_candidate_paths() -> list[Path]:
+    """Locations where `payee_rules.csv` may live, in precedence order."""
+
+    app_dir = Path(__file__).resolve().parent
+    repo_root = app_dir.parent
+
+    candidates: list[Path] = []
+
+    env_override = os.environ.get("SLAM_PAYEE_RULES_PATH", "").strip()
+    if env_override:
+        candidates.append(Path(env_override))
+
+    bases = [repo_root, Path.cwd(), Path("/home/site/wwwroot"), app_dir]
+    for base in bases:
+        candidates.append(base / "Data" / PAYEE_RULES_FILENAME)
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for raw in candidates:
+        key = str(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(raw)
+    return unique
+
+
+def resolve_payee_rules_path(create_if_missing: bool = False) -> Path | None:
+    """Return the first existing `payee_rules.csv`, optionally creating an empty seed file."""
+
+    candidates = _payee_rules_candidate_paths()
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+
+    if not create_if_missing:
+        return candidates[0] if candidates else None
+
+    for path in candidates:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                with path.open("w", encoding="utf-8", newline="") as fh:
+                    fh.write(",".join(PAYEE_RULES_COLUMNS) + "\n")
+            return path
+        except OSError:
+            continue
+    return None
+
+
+def load_payee_rules(path: Path | None = None) -> pd.DataFrame:
+    """Load `payee_rules.csv` into a normalized DataFrame (empty when missing/blank)."""
+
+    target = path or resolve_payee_rules_path(create_if_missing=False)
+    empty = pd.DataFrame(columns=list(PAYEE_RULES_COLUMNS))
+    if not target:
+        return empty
+    target = Path(target)
+    if not target.is_file():
+        return empty
+
+    try:
+        df = pd.read_csv(target, dtype=str, keep_default_na=False)
+    except Exception:
+        return empty
+
+    for col in PAYEE_RULES_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Drop rows with blank pattern (header-only files yield zero rules)
+    df["pattern"] = df["pattern"].astype(str).str.strip()
+    df = df[df["pattern"] != ""].copy()
+
+    return df[list(PAYEE_RULES_COLUMNS)].reset_index(drop=True)
+
+
+def save_payee_rules(rules: pd.DataFrame, path: Path | None = None) -> Path | None:
+    """Persist the rules DataFrame to disk (creates the file/folder when missing)."""
+
+    target = path or resolve_payee_rules_path(create_if_missing=True)
+    if not target:
+        return None
+
+    out = rules.copy() if rules is not None else pd.DataFrame()
+    for col in PAYEE_RULES_COLUMNS:
+        if col not in out.columns:
+            out[col] = ""
+    out = out[list(PAYEE_RULES_COLUMNS)]
+
+    try:
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(target, index=False)
+        return Path(target)
+    except OSError:
+        return None
+
+
+def _compile_rule_pattern(pattern: str) -> re.Pattern[str] | None:
+    """Compile a rule pattern. `re:` prefix → full regex, otherwise case-insensitive substring."""
+
+    if not pattern:
+        return None
+    raw = pattern.strip()
+    if not raw:
+        return None
+    try:
+        if raw.lower().startswith("re:"):
+            return re.compile(raw[3:].lstrip(), re.IGNORECASE)
+        return re.compile(re.escape(raw), re.IGNORECASE)
+    except re.error:
+        return None
+
+
+def apply_payee_rules(
+    df: pd.DataFrame,
+    client_name: str | None = None,
+    rules: pd.DataFrame | None = None,
+    *,
+    touch_last_used: bool = True,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Apply the persistent payee rules to a transactions DataFrame.
+
+    Behavior:
+    - Loads `Data/payee_rules.csv` when `rules` is not provided.
+    - For each rule, finds rows whose `Description` matches the pattern (case-insensitive
+      substring by default, full regex when the pattern starts with ``re:``).
+    - Overwrites `Payee` only when the existing value is blank OR equal to the raw
+      `Description` (i.e. Grok's fall-back). Manual edits are preserved.
+    - Overwrites `Category` only when blank or `Uncategorized` so Laura's downstream
+      Power Query work is never clobbered.
+    - Client-specific rules (matching `client_override`) win over global rules; on tie,
+      the longest pattern wins.
+    - When ``touch_last_used`` is True, refreshes the `last_used` ISO date on rules
+      that fired and silently writes the file back (best-effort; never fatal).
+
+    Returns ``(out_df, info)`` where ``info`` has keys ``rows_changed``, ``rules_used``,
+    ``rules_total``, and ``source_path``.
+    """
+
+    info: dict[str, Any] = {
+        "rows_changed": 0,
+        "rules_used": 0,
+        "rules_total": 0,
+        "source_path": None,
+    }
+
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df, info
+
+    if rules is None:
+        path = resolve_payee_rules_path(create_if_missing=False)
+        info["source_path"] = str(path) if path else None
+        rules = load_payee_rules(path)
+
+    info["rules_total"] = len(rules)
+    if rules.empty or "Description" not in df.columns:
+        return df, info
+
+    out = df.copy()
+    if "Payee" not in out.columns:
+        out["Payee"] = ""
+    if "Category" not in out.columns:
+        out["Category"] = "Uncategorized"
+
+    desc_series = out["Description"].astype(str)
+    payee_series = out["Payee"].astype(str).str.strip()
+    category_series = out["Category"].astype(str).str.strip().str.lower()
+
+    # Filter: keep rules with no client_override OR matching the current client
+    client_lc = (client_name or "").strip().lower()
+    rules_view = rules.copy()
+    rules_view["client_override"] = rules_view["client_override"].astype(str).str.strip()
+    keep_mask = rules_view["client_override"].apply(lambda v: (not v) or (v.lower() == client_lc))
+    rules_view = rules_view[keep_mask].copy()
+    if rules_view.empty:
+        return out, info
+
+    # Sort: client-specific first, then longest pattern (more specific wins on overlap)
+    rules_view["_is_specific"] = (rules_view["client_override"] != "").astype(int)
+    rules_view["_plen"] = rules_view["pattern"].astype(str).str.len()
+    rules_view = rules_view.sort_values(by=["_is_specific", "_plen"], ascending=[False, False])
+
+    matched_any = pd.Series(False, index=out.index)
+    fired_patterns: set[str] = set()
+
+    for _, rule in rules_view.iterrows():
+        pattern = str(rule.get("pattern") or "").strip()
+        matcher = _compile_rule_pattern(pattern)
+        if matcher is None:
+            continue
+
+        try:
+            row_match = desc_series.str.contains(matcher, regex=True, na=False)
+        except re.error:
+            continue
+        if not row_match.any():
+            continue
+
+        clean_payee = str(rule.get("clean_payee") or "").strip()
+        suggested_category = str(rule.get("suggested_category") or "").strip()
+
+        # Preserve manual edits: only overwrite Payee when blank OR equal to description
+        if clean_payee:
+            overwrite_payee = row_match & (
+                payee_series.eq("") | payee_series.eq(desc_series.str.strip())
+            )
+            if overwrite_payee.any():
+                out.loc[overwrite_payee, "Payee"] = clean_payee
+                payee_series = out["Payee"].astype(str).str.strip()
+
+        # Overwrite Category only when blank / Uncategorized
+        if suggested_category:
+            overwrite_cat = row_match & category_series.isin(["", "uncategorized"])
+            if overwrite_cat.any():
+                out.loc[overwrite_cat, "Category"] = suggested_category
+                category_series = out["Category"].astype(str).str.strip().str.lower()
+
+        if clean_payee or suggested_category:
+            matched_any = matched_any | row_match
+            fired_patterns.add(pattern)
+
+    info["rows_changed"] = int(matched_any.sum())
+    info["rules_used"] = len(fired_patterns)
+
+    # Best-effort: bump last_used on rules that fired so Laura sees real usage
+    if touch_last_used and fired_patterns:
+        try:
+            master = load_payee_rules()
+            if not master.empty:
+                today_iso = datetime.now().strftime("%Y-%m-%d")
+                touched = master["pattern"].astype(str).isin(fired_patterns)
+                if touched.any():
+                    master.loc[touched, "last_used"] = today_iso
+                    save_payee_rules(master)
+        except Exception:
+            pass
+
+    return out, info
+
+
+def upsert_payee_rule(
+    pattern: str,
+    clean_payee: str,
+    suggested_category: str = "",
+    client_override: str = "",
+    notes: str = "",
+) -> tuple[bool, Path | None]:
+    """Add or update a single rule in `payee_rules.csv` (creates the file when missing).
+
+    Uniqueness is `(pattern, client_override)` — same pattern can have a global rule plus
+    per-client overrides. Returns ``(success, path)``.
+    """
+
+    pattern_clean = (pattern or "").strip()
+    if not pattern_clean:
+        return False, None
+
+    rules = load_payee_rules()
+    if rules.empty:
+        rules = pd.DataFrame(columns=list(PAYEE_RULES_COLUMNS))
+
+    co_clean = (client_override or "").strip()
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+
+    pattern_col = rules["pattern"].astype(str).str.strip()
+    co_col = rules["client_override"].astype(str).str.strip().str.lower()
+    existing = rules.index[(pattern_col == pattern_clean) & (co_col == co_clean.lower())]
+
+    if len(existing) > 0:
+        idx = existing[0]
+        rules.at[idx, "clean_payee"] = clean_payee or rules.at[idx, "clean_payee"]
+        if suggested_category:
+            rules.at[idx, "suggested_category"] = suggested_category
+        if notes:
+            rules.at[idx, "notes"] = notes
+        rules.at[idx, "last_used"] = today_iso
+    else:
+        new_row = {
+            "pattern": pattern_clean,
+            "clean_payee": (clean_payee or "").strip(),
+            "suggested_category": (suggested_category or "").strip(),
+            "client_override": co_clean,
+            "notes": (notes or "").strip(),
+            "last_used": today_iso,
+        }
+        rules = pd.concat([rules, pd.DataFrame([new_row])], ignore_index=True)
+
+    path = save_payee_rules(rules)
+    return path is not None, path
 
 
 def build_grok_vision_prompt(
@@ -146,6 +465,11 @@ After the CSV, on a single final line, write:
 TOTALS: deposits=<sum_positive> withdrawals=<sum_negative_abs> checks=<count> transactions=<total_count>
 
 Save the CSV as `{Path(pdf).stem}_Transactions_With_Payees.csv` so I can drop it straight into Process-Statement.ps1.
+
+Note: after import, SLAM Services' Bank Statements page will automatically apply a persistent
+payee rules engine (`Data/payee_rules.csv`) that cleans common merchant names and suggests
+categories (e.g. `WAL-MART STORE #1234` → `Walmart` / `Supplies`). Your best-effort Payee /
+Category values are still very helpful — the rules engine refines them, never replaces them.
 """
 
 
@@ -742,9 +1066,12 @@ __all__ = [
     "GROK_CSV_FIELDS",
     "GROK_REQUIRED_COLUMNS",
     "GROK_VISION_HINT",
+    "PAYEE_RULES_COLUMNS",
+    "PAYEE_RULES_FILENAME",
     "RECONCILIATION_AMOUNT_TOLERANCE",
     "UPLOAD_WORK_DIR",
     "ZERO_TRANSACTIONS_MSG",
+    "apply_payee_rules",
     "build_grok_vision_prompt",
     "confidence_review_count",
     "cropper_available",
@@ -753,12 +1080,16 @@ __all__ = [
     "filter_transactions_by_confidence",
     "format_processing_log",
     "load_grok_vision_csv",
+    "load_payee_rules",
     "missing_document_counts",
     "reconcile_statement_totals",
+    "resolve_payee_rules_path",
     "run_statement_pipeline",
+    "save_payee_rules",
     "scripts_available",
     "style_low_confidence_rows",
     "transaction_summary_metrics",
+    "upsert_payee_rule",
 ]
 
 

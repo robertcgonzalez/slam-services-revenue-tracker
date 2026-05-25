@@ -12,16 +12,20 @@ try:
         GROK_CSV_FIELDS,
         GROK_VISION_HINT,
         ZERO_TRANSACTIONS_MSG,
+        apply_payee_rules,
         build_grok_vision_prompt,
         filter_transactions_by_confidence,
         format_processing_log,
         load_grok_vision_csv,
+        load_payee_rules,
         missing_document_counts,
         reconcile_statement_totals,
+        resolve_payee_rules_path,
         run_statement_pipeline,
         scripts_available,
         style_low_confidence_rows,
         transaction_summary_metrics,
+        upsert_payee_rule,
     )
 except ImportError:
 
@@ -74,6 +78,29 @@ except ImportError:
             "reported": None,
         }
 
+    def apply_payee_rules(df, _client_name=None, _rules=None, **_kwargs):
+        return df, {"rows_changed": 0, "rules_used": 0, "rules_total": 0, "source_path": None}
+
+    def load_payee_rules(_path=None):
+        import pandas as _pd
+
+        return _pd.DataFrame(
+            columns=[
+                "pattern",
+                "clean_payee",
+                "suggested_category",
+                "client_override",
+                "notes",
+                "last_used",
+            ]
+        )
+
+    def resolve_payee_rules_path(_create_if_missing=False):
+        return None
+
+    def upsert_payee_rule(*_args, **_kwargs):
+        return False, None
+
     from bank_statements import (
         missing_document_counts,
         run_statement_pipeline,
@@ -85,7 +112,7 @@ from diagnostics import get_app_info, get_app_user, get_data_freshness, get_oper
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.38.2"
+APP_VERSION = "v2.39"
 LOGGER = setup_app_logging()
 
 SLAM_CSS = """
@@ -1373,11 +1400,28 @@ def _render_grok_csv_paste_section(selected_client: str) -> None:
                         "Check that the Grok output contains data rows under the header."
                     )
                 else:
+                    # Auto-apply persistent payee rules before storing in session state.
+                    rules_info: dict | None = None
+                    try:
+                        df, rules_info = apply_payee_rules(df, client_name=selected_client)
+                        log_event(
+                            LOGGER,
+                            "bank_stmt_payee_rules_applied",
+                            client=selected_client,
+                            source="grok_paste",
+                            rows_changed=int((rules_info or {}).get("rows_changed", 0)),
+                            rules_used=int((rules_info or {}).get("rules_used", 0)),
+                            rules_total=int((rules_info or {}).get("rules_total", 0)),
+                        )
+                    except Exception as exc:
+                        log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
+
                     st.session_state["bank_stmt_txn_df"] = df
                     st.session_state["bank_stmt_pipeline_status"] = "success"
                     st.session_state["bank_stmt_csv_path"] = None
                     st.session_state["bank_stmt_cropper_msg"] = None
                     st.session_state["bank_stmt_grok_totals"] = grok_totals
+                    st.session_state["bank_stmt_rules_info"] = rules_info
                     # Reset any prior reconciliation flags so the new load is judged fresh.
                     st.session_state.pop("bank_stmt_needs_review", None)
                     st.session_state.pop("bank_stmt_reconciliation", None)
@@ -1386,9 +1430,15 @@ def _render_grok_csv_paste_section(selected_client: str) -> None:
                         if grok_totals
                         else " · no TOTALS line in CSV"
                     )
+                    rules_note = ""
+                    if rules_info and rules_info.get("rows_changed", 0) > 0:
+                        rules_note = (
+                            f" · payee rules improved {rules_info['rows_changed']} row(s) "
+                            f"via {rules_info['rules_used']} rule(s)"
+                        )
                     st.session_state["bank_stmt_logs"] = (
                         f"[INFO] Loaded {len(df)} transactions from Grok CSV "
-                        f"({source_label}){totals_note}."
+                        f"({source_label}){totals_note}{rules_note}."
                     )
                     metrics = transaction_summary_metrics(df)
                     st.success(
@@ -1397,6 +1447,12 @@ def _render_grok_csv_paste_section(selected_client: str) -> None:
                         f"withdrawals ${metrics['withdrawals']:,.2f} · "
                         f"need review {int(metrics['needs_review'])}."
                     )
+                    if rules_info and rules_info.get("rows_changed", 0) > 0:
+                        st.success(
+                            f"🧠 **{rules_info['rows_changed']} payee mapping(s) applied** "
+                            f"via {rules_info['rules_used']} rule(s) from "
+                            "`Data/payee_rules.csv`."
+                        )
                     log_event(
                         LOGGER,
                         "bank_stmt_grok_csv_loaded",
@@ -1406,6 +1462,189 @@ def _render_grok_csv_paste_section(selected_client: str) -> None:
                         totals_detected=bool(grok_totals),
                     )
                     st.rerun()
+
+
+def _render_payee_rules_controls(selected_client: str, txn_df: pd.DataFrame) -> None:
+    """Payee rules engine UI — Apply button, Learn-this-mapping form, usage metric.
+
+    Sits between the reconciliation banner and the `st.data_editor` on the Bank
+    Statements page (v2.39). Keeps Laura's workflow self-improving: every time she
+    teaches a clean Payee + Category for a messy description, the rule persists to
+    `Data/payee_rules.csv` and gets reapplied on the next statement.
+    """
+
+    rules_info = st.session_state.get("bank_stmt_rules_info") or {}
+    rules_path = resolve_payee_rules_path(create_if_missing=False)
+
+    metric_col, btn_col, src_col = st.columns([1, 1, 2])
+    with metric_col:
+        st.metric(
+            "Rules improved",
+            f"{int(rules_info.get('rows_changed', 0))} rows",
+            help=(
+                f"{int(rules_info.get('rules_used', 0))} of "
+                f"{int(rules_info.get('rules_total', 0))} rules matched on the last apply."
+            ),
+        )
+    with btn_col:
+        if st.button(
+            "🔄 Apply Payee Rules",
+            key="bank_stmt_apply_payee_rules",
+            help=(
+                "Re-run the persistent rules engine against the current transactions. "
+                "Only blank Payee values and Uncategorized rows are touched — your "
+                "manual edits are preserved."
+            ),
+        ):
+            try:
+                updated, info = apply_payee_rules(txn_df, client_name=selected_client)
+                st.session_state["bank_stmt_txn_df"] = updated
+                st.session_state["bank_stmt_rules_info"] = info
+                log_event(
+                    LOGGER,
+                    "bank_stmt_payee_rules_reapplied",
+                    client=selected_client,
+                    rows_changed=int(info.get("rows_changed", 0)),
+                    rules_used=int(info.get("rules_used", 0)),
+                )
+                if info.get("rows_changed", 0) > 0:
+                    st.success(
+                        f"🧠 {info['rows_changed']} row(s) updated via "
+                        f"{info['rules_used']} rule(s)."
+                    )
+                elif info.get("rules_total", 0) == 0:
+                    st.info(
+                        "No rules loaded yet. Use **💡 Learn this mapping** below to "
+                        "teach the system its first rule."
+                    )
+                else:
+                    st.info("No new matches — everything already looks clean.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not apply payee rules: {exc}")
+                log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
+    with src_col:
+        if rules_path and Path(rules_path).is_file():
+            st.caption(f"Rules file: `{rules_path}`")
+        else:
+            st.caption(
+                "Rules file not found — the **Learn** form below will create "
+                "`Data/payee_rules.csv` on first save."
+            )
+
+    with st.expander("💡 Learn this mapping (teach a new rule)", expanded=False):
+        if txn_df is None or txn_df.empty:
+            st.info("Load transactions first, then return here to teach a rule.")
+            return
+
+        display_descriptions = txn_df["Description"].astype(str).tolist()
+        labels = [
+            f"#{i:>3} · {desc[:80]}" + (" …" if len(desc) > 80 else "")
+            for i, desc in enumerate(display_descriptions)
+        ]
+        choice = st.selectbox(
+            "Pick a transaction to learn from",
+            options=list(range(len(labels))),
+            format_func=lambda i: labels[i] if 0 <= i < len(labels) else f"#{i}",
+            key="bank_stmt_learn_row_pick",
+        )
+        if choice is None or choice < 0 or choice >= len(txn_df):
+            return
+
+        picked_row = txn_df.iloc[int(choice)]
+        picked_desc = str(picked_row.get("Description", "")).strip()
+        picked_payee = str(picked_row.get("Payee", "")).strip()
+        picked_cat = str(picked_row.get("Category", "")).strip()
+        st.caption(
+            f"Selected: **{picked_desc[:120]}** · "
+            f"current Payee: `{picked_payee or '—'}` · "
+            f"current Category: `{picked_cat or '—'}`"
+        )
+
+        with st.form("bank_stmt_learn_form", clear_on_submit=False):
+            default_pattern = picked_desc.split()[0] if picked_desc else ""
+            pattern_input = st.text_input(
+                "Match pattern (case-insensitive substring; prefix with `re:` for regex)",
+                value=default_pattern,
+                help=(
+                    "Tip: keep the pattern short and unique to the merchant — e.g. "
+                    "`WAL-MART` (not the full description). The rule will match every "
+                    "description that contains this substring."
+                ),
+                key="bank_stmt_learn_pattern",
+            )
+            clean_input = st.text_input(
+                "Clean Payee",
+                value=picked_payee or "",
+                key="bank_stmt_learn_clean_payee",
+            )
+            category_input = st.text_input(
+                "Suggested Category (optional)",
+                value=(picked_cat if picked_cat.lower() not in ("", "uncategorized") else ""),
+                key="bank_stmt_learn_category",
+            )
+            scope_specific = st.checkbox(
+                f"Apply only to **{selected_client}** (client-specific override)",
+                value=False,
+                key="bank_stmt_learn_scope_specific",
+            )
+            notes_input = st.text_input(
+                "Notes (optional)",
+                value="",
+                key="bank_stmt_learn_notes",
+            )
+            submitted = st.form_submit_button("💾 Save mapping", type="primary")
+
+        if submitted:
+            if not pattern_input.strip():
+                st.warning("Pattern cannot be blank.")
+                return
+            if not clean_input.strip():
+                st.warning("Clean Payee cannot be blank.")
+                return
+            override = selected_client if scope_specific else ""
+            try:
+                ok, saved_path = upsert_payee_rule(
+                    pattern=pattern_input,
+                    clean_payee=clean_input,
+                    suggested_category=category_input,
+                    client_override=override,
+                    notes=notes_input,
+                )
+            except Exception as exc:
+                st.error(f"Could not save rule: {exc}")
+                log_event(LOGGER, "bank_stmt_payee_rule_save_error", error=str(exc)[:200])
+                return
+
+            if not ok:
+                st.error(
+                    "Could not write to `Data/payee_rules.csv`. Check folder "
+                    "permissions or set the `SLAM_PAYEE_RULES_PATH` environment variable."
+                )
+                return
+
+            log_event(
+                LOGGER,
+                "bank_stmt_payee_rule_learned",
+                client=selected_client,
+                pattern=pattern_input.strip()[:80],
+                clean_payee=clean_input.strip()[:80],
+                client_specific=bool(override),
+            )
+            try:
+                updated, info = apply_payee_rules(
+                    st.session_state.get("bank_stmt_txn_df"),
+                    client_name=selected_client,
+                )
+                st.session_state["bank_stmt_txn_df"] = updated
+                st.session_state["bank_stmt_rules_info"] = info
+            except Exception as exc:
+                log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
+            st.success(
+                f"Saved rule **{pattern_input.strip()} → {clean_input.strip()}** to "
+                f"`{saved_path}`. Reapplied across the current statement."
+            )
+            st.rerun()
 
 
 def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None:
@@ -1486,6 +1725,31 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
                     last_status = meta.get("status", "success")
                 elif last_status != "partial":
                     last_status = "error"
+            # Auto-apply persistent payee rules before storing in session state so
+            # the review editor + reconciliation banner see the cleaned values.
+            rules_info: dict | None = None
+            if last_df is not None and not last_df.empty:
+                try:
+                    last_df, rules_info = apply_payee_rules(last_df, client_name=selected_client)
+                    if rules_info and rules_info.get("rows_changed", 0) > 0:
+                        all_logs.append(
+                            f"[INFO] Payee rules engine: {rules_info['rows_changed']} row(s) "
+                            f"improved via {rules_info['rules_used']} rule(s) "
+                            f"(of {rules_info['rules_total']} loaded)."
+                        )
+                    log_event(
+                        LOGGER,
+                        "bank_stmt_payee_rules_applied",
+                        client=selected_client,
+                        source="parser",
+                        rows_changed=int((rules_info or {}).get("rows_changed", 0)),
+                        rules_used=int((rules_info or {}).get("rules_used", 0)),
+                        rules_total=int((rules_info or {}).get("rules_total", 0)),
+                    )
+                except Exception as exc:
+                    all_logs.append(f"[WARN] Payee rules engine skipped: {exc}")
+                    log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
+
             st.session_state["bank_stmt_logs"] = format_processing_log(all_logs)
             st.session_state["bank_stmt_txn_df"] = last_df
             st.session_state["bank_stmt_csv_path"] = str(last_csv) if last_csv else None
@@ -1505,6 +1769,7 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             st.session_state["bank_stmt_text_layer"] = bool(
                 last_meta.get("text_layer_found", False)
             )
+            st.session_state["bank_stmt_rules_info"] = rules_info
             # Parser path has no Grok TOTALS line — clear any stale value so the
             # reconciliation banner correctly reports "no_reference" for this run.
             st.session_state["bank_stmt_grok_totals"] = None
@@ -1536,6 +1801,13 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
                     st.info(f"Output CSV: `{last_csv}`")
                 if cropper_msg:
                     st.info(cropper_msg)
+                if rules_info and rules_info.get("rows_changed", 0) > 0:
+                    st.success(
+                        f"🧠 **{rules_info['rows_changed']} payee mapping(s) applied** "
+                        f"via {rules_info['rules_used']} rule(s) "
+                        f"(of {rules_info['rules_total']} loaded from "
+                        "`Data/payee_rules.csv`)."
+                    )
                 log_event(
                     LOGGER,
                     "bank_stmt_process_done",
@@ -1674,6 +1946,10 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             )
 
         st.subheader("Transactions (review & edit)")
+
+        # --- Persistent payee rules engine (v2.39) ---
+        _render_payee_rules_controls(selected_client, txn_df)
+
         conf_filter = st.radio(
             "Transaction filter",
             ["Show All", "Low/Medium Confidence Only"],
