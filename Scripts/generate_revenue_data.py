@@ -1,13 +1,15 @@
-import pandas as pd
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pandas as pd
 
 # Project paths
 BASE = Path(r"C:\SLAM-Services-Project")
 DATA_DIR = BASE / "Data" / "Revenue_Tracker_Migration"
 CLIENTS_CSV = DATA_DIR / "Clients.csv"
 REQUESTS_CSV = DATA_DIR / "RevenueRequests.csv"
+
 
 def clean_clients(df):
     # Rename and clean: first row is junk, skip lines with empty Business Name
@@ -22,12 +24,30 @@ def clean_clients(df):
             df[col] = ""
     return df[cols_to_keep].reset_index(drop=True)
 
+
 def generate_requests(clients_df, num_samples=30):
     random.seed(42)  # reproducible
 
     # Industries hints
-    is_restaurant = lambda name: any(x in name.upper() for x in ["GRILL", "CANTINA", "RESTAURANT", "TACOS", "MEX", "BAR", "TAQUERIA", "FIESTA"])
-    is_construction = lambda name: any(x in name.upper() for x in ["CONTRACT", "CONCRETE", "ROOF", "BUILDER", "MASON", "PAINT", "REMODEL", "LEVEL", "PLUMB", "DRY"])
+    is_restaurant = lambda name: any(
+        x in name.upper()
+        for x in ["GRILL", "CANTINA", "RESTAURANT", "TACOS", "MEX", "BAR", "TAQUERIA", "FIESTA"]
+    )
+    is_construction = lambda name: any(
+        x in name.upper()
+        for x in [
+            "CONTRACT",
+            "CONCRETE",
+            "ROOF",
+            "BUILDER",
+            "MASON",
+            "PAINT",
+            "REMODEL",
+            "LEVEL",
+            "PLUMB",
+            "DRY",
+        ]
+    )
 
     types_pool = ["Monthly Bookkeeping", "Sales Tax", "Liquor Tax"]
     statuses = ["Pending", "Received", "Invoiced", "Paid"]
@@ -36,7 +56,9 @@ def generate_requests(clients_df, num_samples=30):
     rows = []
 
     # Sample 28 diverse high-likelihood clients
-    sample_clients = clients_df.sample(n=min(28, len(clients_df)), random_state=42).reset_index(drop=True)
+    sample_clients = clients_df.sample(n=min(28, len(clients_df)), random_state=42).reset_index(
+        drop=True
+    )
 
     request_id = 1000
     for _, row in sample_clients.iterrows():
@@ -59,29 +81,44 @@ def generate_requests(clients_df, num_samples=30):
                 received_dt = due_dt + timedelta(days=random.randint(0, 6))
                 received = received_dt.strftime("%Y-%m-%d")
 
-            amount = round(random.uniform(450, 1850), 2) if rtype == "Monthly Bookkeeping" else round(random.uniform(280, 720), 2)
+            amount = (
+                round(random.uniform(450, 1850), 2)
+                if rtype == "Monthly Bookkeeping"
+                else round(random.uniform(280, 720), 2)
+            )
 
-            notes_options = ["", "Follow up by text 5/12", "Partial payment $300", "Waiting on bank recs", "Missing liquor report"]
+            notes_options = [
+                "",
+                "Follow up by text 5/12",
+                "Partial payment $300",
+                "Waiting on bank recs",
+                "Missing liquor report",
+            ]
             notes = random.choice(notes_options)
             doc_bank = "✓" if random.random() > 0.35 else ""
-            doc_sales = "✓" if rtype in ("Sales Tax", "Liquor Tax") and random.random() > 0.4 else ""
+            doc_sales = (
+                "✓" if rtype in ("Sales Tax", "Liquor Tax") and random.random() > 0.4 else ""
+            )
 
-            rows.append({
-                "request_id": request_id,
-                "business_name": name,
-                "request_type": rtype,
-                "period": period,
-                "status": status,
-                "amount_due": amount,
-                "due_date": due,
-                "received_date": received,
-                "notes": notes,
-                "bank_statement_received": doc_bank,
-                "sales_report_received": doc_sales
-            })
+            rows.append(
+                {
+                    "request_id": request_id,
+                    "business_name": name,
+                    "request_type": rtype,
+                    "period": period,
+                    "status": status,
+                    "amount_due": amount,
+                    "due_date": due,
+                    "received_date": received,
+                    "notes": notes,
+                    "bank_statement_received": doc_bank,
+                    "sales_report_received": doc_sales,
+                }
+            )
             request_id += 1
 
     return pd.DataFrame(rows)
+
 
 def main():
     print("Loading Clients.csv...")
@@ -105,6 +142,7 @@ def main():
     # Show sample output
     print("\nSample of new RevenueRequests.csv:")
     print(requests.head(8).to_string())
+
 
 if __name__ == "__main__":
     main()

@@ -38,7 +38,7 @@ You are assisting the SLAM Services Digital Transformation Project. **Cursor** (
 
 ## Project Context
 
-- Phase 2.5 focus: Stabilize Revenue Tracker (Streamlit + CSVs) on Azure; **Cursor-led** dev environment with Kilo as secondary (v2.15).
+- Phase 2.5 + UAT (v2.32): Revenue Tracker tuned for Laura/Stef daily use with unsaved-change guards, new quick views, and ops health scripts; PostgreSQL optional with CSV fallback; **Cursor-led** (v2.15).
 - Current tech stack: Python + Streamlit, Azure CLI, eventual PostgreSQL.
 - Goal: Reduce manual work for Laura/Stef, enable transition to Patty & Robert.
 
