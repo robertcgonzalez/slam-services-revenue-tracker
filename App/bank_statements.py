@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import re
 import subprocess
@@ -46,6 +47,26 @@ GROK_CSV_FIELDS = (
     "Date,Description,Payee,Amount,Check#,Category,SubCategory,SignedAmount,YearMonth,"
     "Confidence,NeedsReview,ReviewReason"
 )
+
+# Canonical column order for any DataFrame that flows downstream
+# (parser output, Grok CSV paste/upload, Power Query, Process-Statement.ps1).
+GROK_CSV_COLUMNS: tuple[str, ...] = (
+    "Date",
+    "Description",
+    "Payee",
+    "Amount",
+    "Check#",
+    "Category",
+    "SubCategory",
+    "SignedAmount",
+    "YearMonth",
+    "Confidence",
+    "NeedsReview",
+    "ReviewReason",
+)
+
+# Minimum columns Grok must produce for us to consider the paste/upload valid.
+GROK_REQUIRED_COLUMNS: tuple[str, ...] = ("Date", "Description", "Amount")
 
 
 def build_grok_vision_prompt(
@@ -473,11 +494,255 @@ def filter_transactions_by_confidence(
     return df[(conf != "High") & (conf != "")].copy()
 
 
+def _strip_grok_csv_noise(text: str) -> str:
+    """Remove the trailing TOTALS line and any stray markdown fences Grok sometimes emits."""
+
+    lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
+
+    cleaned: list[str] = []
+    for ln in lines:
+        stripped = ln.strip()
+        # Drop the TOTALS summary line Grok adds at the end of the CSV.
+        if stripped.lower().startswith("totals:"):
+            continue
+        # Drop empty trailing/leading lines but keep blanks inside the CSV body
+        # (pd.read_csv handles them).
+        cleaned.append(ln)
+
+    # Trim leading blank lines that would confuse pd.read_csv header detection.
+    while cleaned and not cleaned[0].strip():
+        cleaned.pop(0)
+
+    return "\n".join(cleaned).strip() + "\n"
+
+
+# Grok emits one summary line at the very end of the CSV in the form:
+#   TOTALS: deposits=1234.56 withdrawals=250.00 checks=1 transactions=2
+# We capture this BEFORE _strip_grok_csv_noise removes it so we can use it
+# as a reconciliation anchor against the detailed rows.
+_GROK_TOTALS_RE = re.compile(r"(?im)^\s*TOTALS\s*:\s*(?P<body>.+?)\s*$")
+_GROK_TOTALS_KV_RE = re.compile(
+    r"(?i)\b(deposits|withdrawals|checks|transactions)\s*=\s*([-+]?\d+(?:\.\d+)?)"
+)
+
+
+def _parse_grok_totals_line(text: str) -> dict[str, float | int | None] | None:
+    """Extract Grok's trailing ``TOTALS: deposits=... withdrawals=... checks=... transactions=...`` line.
+
+    Returns a dict with keys ``deposits``, ``withdrawals`` (floats), ``checks``,
+    ``transactions`` (ints), or ``None`` when the marker is absent. Any individual
+    field that is missing from the line is set to ``None`` so callers can detect
+    partial reports.
+    """
+
+    if not text:
+        return None
+
+    matches = list(_GROK_TOTALS_RE.finditer(text))
+    if not matches:
+        return None
+
+    # Use the LAST occurrence (Grok always appends it at the end of the CSV).
+    body = matches[-1].group("body")
+
+    parsed: dict[str, float | int | None] = {
+        "deposits": None,
+        "withdrawals": None,
+        "checks": None,
+        "transactions": None,
+    }
+    for key, raw_value in _GROK_TOTALS_KV_RE.findall(body):
+        key_lc = key.lower()
+        try:
+            num = float(raw_value)
+        except ValueError:
+            continue
+        if key_lc in ("checks", "transactions"):
+            parsed[key_lc] = int(round(num))
+        else:
+            parsed[key_lc] = num
+
+    if all(v is None for v in parsed.values()):
+        return None
+
+    return parsed
+
+
+def _coerce_amount_series(s: pd.Series) -> pd.Series:
+    """Normalize a money-ish column to float (strips $, commas, blanks)."""
+
+    return pd.to_numeric(
+        s.astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    ).fillna(0.0)
+
+
+def _coerce_yes_no(s: pd.Series) -> pd.Series:
+    """Normalize a boolean-ish review flag to 'Yes' / 'No' strings."""
+
+    truthy = {"yes", "y", "true", "1", "needs review"}
+    return s.astype(str).str.strip().str.lower().map(lambda v: "Yes" if v in truthy else "No")
+
+
+def load_grok_vision_csv(
+    source: str | bytes | Any,
+) -> tuple[pd.DataFrame, dict[str, float | int | None] | None]:
+    """Parse a Grok Vision CSV (pasted text, uploaded file, or raw bytes) into a normalized DataFrame.
+
+    Accepts:
+    - A pasted string of CSV text (with or without the trailing ``TOTALS:`` summary line).
+    - Raw ``bytes`` (e.g. from ``UploadedFile.getvalue()``).
+    - A Streamlit ``UploadedFile`` / any file-like object exposing ``getvalue()`` or ``read()``.
+
+    Returns a 2-tuple ``(df, grok_totals)``:
+    - ``df``: DataFrame with columns matching :data:`GROK_CSV_COLUMNS` (same shape as the
+      lightweight parser output). Missing columns are filled with safe defaults so the result
+      drops straight into the Bank Statements review UI and downstream Power Query workflow.
+    - ``grok_totals``: dict with ``deposits``, ``withdrawals`` (floats), ``checks``,
+      ``transactions`` (ints) parsed from Grok's trailing ``TOTALS:`` summary line, or
+      ``None`` when the line is absent. Used by :func:`reconcile_statement_totals` to
+      cross-check the detailed rows against Grok's own self-reported summary.
+
+    Raises ``ValueError`` with a clear, user-facing message when the input cannot be parsed
+    or is missing required columns.
+    """
+
+    # --- Resolve input → text ---
+    if source is None:
+        raise ValueError("No CSV text or file provided.")
+
+    text: str
+    if isinstance(source, str):
+        text = source
+    elif isinstance(source, (bytes, bytearray)):
+        text = bytes(source).decode("utf-8-sig", errors="replace")
+    elif hasattr(source, "getvalue"):
+        raw = source.getvalue()
+        text = (
+            raw.decode("utf-8-sig", errors="replace")
+            if isinstance(raw, (bytes, bytearray))
+            else str(raw)
+        )
+    elif hasattr(source, "read"):
+        raw = source.read()
+        text = (
+            raw.decode("utf-8-sig", errors="replace")
+            if isinstance(raw, (bytes, bytearray))
+            else str(raw)
+        )
+    else:
+        raise ValueError("Unsupported CSV source — expected text, bytes, or an uploaded file.")
+
+    # Capture Grok's trailing TOTALS line BEFORE _strip_grok_csv_noise removes it,
+    # so reconcile_statement_totals can use it as the reconciliation anchor.
+    grok_totals = _parse_grok_totals_line(text)
+
+    cleaned = _strip_grok_csv_noise(text)
+    if not cleaned.strip():
+        raise ValueError("CSV is empty — nothing to parse.")
+
+    # --- Read CSV ---
+    # Real-world Grok output sometimes contains unquoted commas inside the
+    # Description/Payee fields (e.g. "AMAZON.COM*XX1, INC"), which breaks the
+    # default C parser with "Expected 12 fields in line X, saw Y". The python
+    # engine plus QUOTE_NONE + on_bad_lines='warn' makes the read tolerant of
+    # those rows while preserving the rest of the CSV.
+    try:
+        df = pd.read_csv(
+            io.StringIO(cleaned),
+            dtype=str,
+            keep_default_na=False,
+            engine="python",  # More tolerant of embedded commas
+            on_bad_lines="warn",  # Don't crash on malformed lines
+            quoting=3,  # csv.QUOTE_NONE — treat commas literally
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"Could not read CSV — most likely due to commas inside Description/Payee fields. "
+            f"Try re-copying the full output from Grok (include the TOTALS line). "
+            f"Original error: {exc}"
+        ) from exc
+
+    if df.empty:
+        raise ValueError("No transactions found in the CSV (header only).")
+
+    # --- Validate header ---
+    df.columns = [c.strip() for c in df.columns]
+    missing_required = [c for c in GROK_REQUIRED_COLUMNS if c not in df.columns]
+    if missing_required:
+        raise ValueError(
+            "CSV must contain the Grok Vision header. Missing required column(s): "
+            + ", ".join(missing_required)
+            + ". Expected header: "
+            + GROK_CSV_FIELDS
+        )
+
+    # --- Fill missing optional columns with safe defaults ---
+    defaults: dict[str, str] = {
+        "Payee": "",
+        "Check#": "",
+        "Category": "Uncategorized",
+        "SubCategory": "",
+        "SignedAmount": "",
+        "YearMonth": "",
+        "Confidence": "High",
+        "NeedsReview": "No",
+        "ReviewReason": "",
+    }
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+
+    # --- Normalize types ---
+    df["Date"] = df["Date"].astype(str).str.strip()
+    df["Description"] = df["Description"].astype(str).str.strip()
+    df["Payee"] = df["Payee"].astype(str).str.strip()
+    df["Check#"] = df["Check#"].astype(str).str.strip()
+    df["Category"] = df["Category"].astype(str).str.strip().replace("", "Uncategorized")
+    df["SubCategory"] = df["SubCategory"].astype(str).str.strip()
+    df["Confidence"] = df["Confidence"].astype(str).str.strip().str.title().replace("", "High")
+    df["ReviewReason"] = df["ReviewReason"].astype(str).str.strip()
+
+    df["Amount"] = _coerce_amount_series(df["Amount"])
+    # If SignedAmount is missing/blank, mirror Amount (matches Grok prompt rules).
+    signed_raw = df["SignedAmount"].astype(str).str.strip()
+    signed_numeric = _coerce_amount_series(df["SignedAmount"])
+    df["SignedAmount"] = signed_numeric.where(signed_raw != "", df["Amount"])
+
+    # Derive YearMonth from Date when missing.
+    ym = df["YearMonth"].astype(str).str.strip()
+    parsed_dates = pd.to_datetime(df["Date"], errors="coerce")
+    derived_ym = parsed_dates.dt.strftime("%Y-%m").fillna("")
+    df["YearMonth"] = ym.where(ym != "", derived_ym)
+
+    # NeedsReview: respect explicit value, else derive from Confidence (Medium/Low → Yes).
+    nr_raw = df["NeedsReview"].astype(str).str.strip()
+    nr_normalized = _coerce_yes_no(nr_raw)
+    conf_implies_review = df["Confidence"].isin(["Medium", "Low"]).map({True: "Yes", False: "No"})
+    df["NeedsReview"] = nr_normalized.where(nr_raw != "", conf_implies_review)
+
+    # Drop rows where every required field is blank (defensive — Grok rarely emits these).
+    blank_mask = (df["Date"] == "") & (df["Description"] == "") & (df["Amount"] == 0.0)
+    df = df.loc[~blank_mask].copy()
+
+    # --- Reorder to canonical column order, keeping any extras at the end ---
+    extras = [c for c in df.columns if c not in GROK_CSV_COLUMNS]
+    df = df[list(GROK_CSV_COLUMNS) + extras]
+
+    return df.reset_index(drop=True), grok_totals
+
+
 __all__ = [
     "CROPPED_CHECKS_DIR",
     "CROPPER_SKIP_USER_MSG",
+    "GROK_CSV_COLUMNS",
     "GROK_CSV_FIELDS",
+    "GROK_REQUIRED_COLUMNS",
     "GROK_VISION_HINT",
+    "RECONCILIATION_AMOUNT_TOLERANCE",
     "UPLOAD_WORK_DIR",
     "ZERO_TRANSACTIONS_MSG",
     "build_grok_vision_prompt",
@@ -487,7 +752,9 @@ __all__ = [
     "extract_pdf_raw_text",
     "filter_transactions_by_confidence",
     "format_processing_log",
+    "load_grok_vision_csv",
     "missing_document_counts",
+    "reconcile_statement_totals",
     "run_statement_pipeline",
     "scripts_available",
     "style_low_confidence_rows",
@@ -553,6 +820,120 @@ def transaction_summary_metrics(df: pd.DataFrame) -> dict[str, float | int]:
         "deposits": deposits,
         "withdrawals": withdrawals,
         "needs_review": confidence_review_count(df),
+    }
+
+
+def _checks_count(df: pd.DataFrame) -> int:
+    """Count rows that look like Check Register entries (non-blank Check# field)."""
+
+    if df is None or df.empty or "Check#" not in df.columns:
+        return 0
+
+    s = df["Check#"].astype(str).str.strip()
+    return int((s != "").sum())
+
+
+# Penny-level tolerance for comparing reported vs. computed dollar totals.
+RECONCILIATION_AMOUNT_TOLERANCE = 0.01
+
+
+def reconcile_statement_totals(df: pd.DataFrame, grok_totals: dict | None = None) -> dict[str, Any]:
+    """Compare computed totals from detailed rows against Grok's reported TOTALS line.
+
+    Returns dict with match status, differences, and reconciliation message for UI.
+
+    Status values:
+    - ``"match"``         — every reported field equals the computed value within tolerance.
+    - ``"mismatch"``      — at least one reported field differs from computed; ``needs_review``
+                            is set to True so the UI can flag the entire statement.
+    - ``"no_reference"``  — no Grok TOTALS line was provided (parser path or older Grok output);
+                            reconciliation is skipped and the detailed totals stand on their own.
+    """
+
+    metrics = transaction_summary_metrics(df)
+    computed: dict[str, Any] = {
+        "deposits": float(metrics["deposits"]),
+        "withdrawals": float(metrics["withdrawals"]),
+        "transactions": int(metrics["count"]),
+        "checks": _checks_count(df),
+    }
+
+    if not grok_totals:
+        return {
+            "status": "no_reference",
+            "message": (
+                "No source TOTALS line available — reconciliation cross-check skipped. "
+                "Detailed transactions stand on their own."
+            ),
+            "differences": {},
+            "needs_review": False,
+            "computed": computed,
+            "reported": None,
+        }
+
+    differences: dict[str, dict[str, Any]] = {}
+    for key in ("deposits", "withdrawals", "checks", "transactions"):
+        reported = grok_totals.get(key)
+        if reported is None:
+            continue
+        if key in ("deposits", "withdrawals"):
+            comp_val = float(computed[key])
+            rep_val = float(reported)
+            diff = comp_val - rep_val
+            if abs(diff) > RECONCILIATION_AMOUNT_TOLERANCE:
+                differences[key] = {
+                    "reported": rep_val,
+                    "computed": comp_val,
+                    "diff": diff,
+                }
+        else:
+            comp_val = int(computed[key])
+            rep_val = int(reported)
+            diff = comp_val - rep_val
+            if diff != 0:
+                differences[key] = {
+                    "reported": rep_val,
+                    "computed": comp_val,
+                    "diff": diff,
+                }
+
+    if not differences:
+        message = (
+            f"All four totals match the source statement — "
+            f"deposits ${computed['deposits']:,.2f} · "
+            f"withdrawals ${computed['withdrawals']:,.2f} · "
+            f"checks {computed['checks']} · "
+            f"transactions {computed['transactions']}."
+        )
+        return {
+            "status": "match",
+            "message": message,
+            "differences": {},
+            "needs_review": False,
+            "computed": computed,
+            "reported": dict(grok_totals),
+        }
+
+    parts: list[str] = []
+    for key, vals in differences.items():
+        if key in ("deposits", "withdrawals"):
+            parts.append(
+                f"{key}: detail ${vals['computed']:,.2f} vs source ${vals['reported']:,.2f} "
+                f"(off by ${vals['diff']:+,.2f})"
+            )
+        else:
+            parts.append(
+                f"{key}: detail {vals['computed']} vs source {vals['reported']} "
+                f"(off by {vals['diff']:+d})"
+            )
+    message = "Detailed totals do not match the source statement → " + "; ".join(parts)
+    return {
+        "status": "mismatch",
+        "message": message,
+        "differences": differences,
+        "needs_review": True,
+        "computed": computed,
+        "reported": dict(grok_totals),
     }
 
 

@@ -9,12 +9,15 @@ from app_logging import log_event, setup_app_logging
 
 try:
     from bank_statements import (
+        GROK_CSV_FIELDS,
         GROK_VISION_HINT,
         ZERO_TRANSACTIONS_MSG,
         build_grok_vision_prompt,
         filter_transactions_by_confidence,
         format_processing_log,
+        load_grok_vision_csv,
         missing_document_counts,
+        reconcile_statement_totals,
         run_statement_pipeline,
         scripts_available,
         style_low_confidence_rows,
@@ -49,6 +52,27 @@ except ImportError:
         "or an unsupported layout."
     )
     GROK_VISION_HINT = "Try the Grok Vision skill with Export Raw Text or the PDF pages."
+    GROK_CSV_FIELDS = (
+        "Date,Description,Payee,Amount,Check#,Category,SubCategory,SignedAmount,YearMonth,"
+        "Confidence,NeedsReview,ReviewReason"
+    )
+
+    def load_grok_vision_csv(_source):
+        raise RuntimeError(
+            "Paste Grok CSV is unavailable in this deploy — bank_statements module is out of sync."
+        )
+
+    def reconcile_statement_totals(_df, _grok_totals=None):
+        return {
+            "status": "no_reference",
+            "message": (
+                "Reconciliation unavailable in this deploy — bank_statements module is out of sync."
+            ),
+            "differences": {},
+            "needs_review": False,
+            "computed": {},
+            "reported": None,
+        }
 
     from bank_statements import (
         missing_document_counts,
@@ -61,7 +85,7 @@ from diagnostics import get_app_info, get_app_user, get_data_freshness, get_oper
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.37"
+APP_VERSION = "v2.38.2"
 LOGGER = setup_app_logging()
 
 SLAM_CSS = """
@@ -1270,6 +1294,120 @@ def _render_grok_vision_section(selected_client: str) -> None:
         )
 
 
+def _render_grok_csv_paste_section(selected_client: str) -> None:
+    """Native 'Paste Grok-extracted CSV' panel — Option 2 alongside the parser pipeline.
+
+    Closes the manual save-as-CSV → PowerShell gap by letting Laura paste (or upload)
+    the CSV Grok Vision emits and load it directly into the same review UI that the
+    lightweight parser feeds. Stores the parsed DataFrame in the shared
+    ``bank_stmt_txn_df`` session key so all downstream metrics, filters, the
+    data_editor, the Download transactions CSV button, and "Link to revenue request"
+    work identically to the parser path.
+    """
+    placeholder = (
+        f"{GROK_CSV_FIELDS}\n"
+        "2026-01-15,DEPOSIT ABC CO,ABC Co,1234.56,,Uncategorized,,1234.56,2026-01,High,No,\n"
+        "2026-01-16,CHECK 2473,Acme Supply,-250.00,2473,Uncategorized,,-250.00,2026-01,High,No,\n"
+        "...\n"
+        "TOTALS: deposits=1234.56 withdrawals=250.00 checks=1 transactions=2"
+    )
+
+    with st.expander("📋 Option 2: Paste Grok-extracted CSV here", expanded=False):
+        st.caption(
+            "Already ran Grok Vision in another tab? Paste the CSV output below "
+            "(or upload the saved CSV file) to load transactions directly into the "
+            "review UI — no save-as-CSV / PowerShell step required."
+        )
+
+        pasted = st.text_area(
+            "Paste the full CSV output from Grok here (including the TOTALS line at the bottom)",
+            height=400,
+            placeholder=placeholder,
+            key="bank_stmt_grok_csv_paste",
+        )
+
+        uploaded_csv = st.file_uploader(
+            "…or upload the saved Grok CSV file",
+            type=["csv"],
+            key="bank_stmt_grok_csv_upload",
+        )
+
+        if st.button(
+            "Load / Parse Grok CSV",
+            type="primary",
+            key="bank_stmt_grok_csv_load",
+        ):
+            source_label: str | None = None
+            df: pd.DataFrame | None = None
+            grok_totals: dict | None = None
+            try:
+                if uploaded_csv is not None:
+                    df, grok_totals = load_grok_vision_csv(uploaded_csv.getvalue())
+                    source_label = uploaded_csv.name
+                elif pasted and pasted.strip():
+                    df, grok_totals = load_grok_vision_csv(pasted)
+                    source_label = "pasted CSV"
+                else:
+                    st.warning("Paste CSV text or upload a CSV file before loading.")
+            except ValueError as exc:
+                st.error(f"Could not parse Grok CSV — {exc}")
+                log_event(
+                    LOGGER,
+                    "bank_stmt_grok_csv_parse_error",
+                    client=selected_client,
+                    error=str(exc)[:200],
+                )
+            except Exception as exc:
+                st.error(f"Unexpected error parsing Grok CSV: {exc}")
+                log_event(
+                    LOGGER,
+                    "bank_stmt_grok_csv_unexpected_error",
+                    client=selected_client,
+                    error=str(exc)[:200],
+                )
+
+            if df is not None:
+                if df.empty:
+                    st.warning(
+                        "No transactions found in the CSV. "
+                        "Check that the Grok output contains data rows under the header."
+                    )
+                else:
+                    st.session_state["bank_stmt_txn_df"] = df
+                    st.session_state["bank_stmt_pipeline_status"] = "success"
+                    st.session_state["bank_stmt_csv_path"] = None
+                    st.session_state["bank_stmt_cropper_msg"] = None
+                    st.session_state["bank_stmt_grok_totals"] = grok_totals
+                    # Reset any prior reconciliation flags so the new load is judged fresh.
+                    st.session_state.pop("bank_stmt_needs_review", None)
+                    st.session_state.pop("bank_stmt_reconciliation", None)
+                    totals_note = (
+                        " · TOTALS line detected (will reconcile against detail rows)"
+                        if grok_totals
+                        else " · no TOTALS line in CSV"
+                    )
+                    st.session_state["bank_stmt_logs"] = (
+                        f"[INFO] Loaded {len(df)} transactions from Grok CSV "
+                        f"({source_label}){totals_note}."
+                    )
+                    metrics = transaction_summary_metrics(df)
+                    st.success(
+                        f"Loaded **{len(df)}** transactions from {source_label} · "
+                        f"deposits ${metrics['deposits']:,.2f} · "
+                        f"withdrawals ${metrics['withdrawals']:,.2f} · "
+                        f"need review {int(metrics['needs_review'])}."
+                    )
+                    log_event(
+                        LOGGER,
+                        "bank_stmt_grok_csv_loaded",
+                        client=selected_client,
+                        rows=len(df),
+                        source=source_label,
+                        totals_detected=bool(grok_totals),
+                    )
+                    st.rerun()
+
+
 def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None:
     """Core Workstream #2 MVP — upload PDF, run parser pipeline, review, mark received."""
     st.header("🏦 Bank Statements")
@@ -1367,6 +1505,11 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             st.session_state["bank_stmt_text_layer"] = bool(
                 last_meta.get("text_layer_found", False)
             )
+            # Parser path has no Grok TOTALS line — clear any stale value so the
+            # reconciliation banner correctly reports "no_reference" for this run.
+            st.session_state["bank_stmt_grok_totals"] = None
+            st.session_state.pop("bank_stmt_needs_review", None)
+            st.session_state.pop("bank_stmt_reconciliation", None)
             if last_df is not None:
                 row_count = len(last_df)
                 if row_count == 0:
@@ -1462,6 +1605,74 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
         ]
         view_df = txn_df[display_cols] if display_cols else txn_df
 
+        # --- Statement reconciliation check (v2.38.2) ---
+        # Compare detailed-row totals against Grok's self-reported TOTALS line so Laura
+        # gets 100% assurance that what flows into Power Query / Process-Statement.ps1
+        # matches the source statement summary. Parser path has no source TOTALS, so
+        # the function gracefully returns "no_reference".
+        recon = reconcile_statement_totals(txn_df, st.session_state.get("bank_stmt_grok_totals"))
+        st.session_state["bank_stmt_reconciliation"] = recon
+        if recon["status"] == "match":
+            st.success(f"✅ **Totals match source statement.** {recon['message']}")
+        elif recon["status"] == "mismatch":
+            st.session_state["bank_stmt_needs_review"] = True
+            st.error(f"⚠️ **Reconciliation mismatch — review required.** {recon['message']}")
+            with st.expander("Reconciliation details", expanded=True):
+                rows = []
+                reported = recon.get("reported") or {}
+                computed = recon.get("computed") or {}
+                differences = recon.get("differences") or {}
+                for key in ("deposits", "withdrawals", "checks", "transactions"):
+                    rep = reported.get(key)
+                    comp = computed.get(key)
+                    if rep is None and comp is None:
+                        continue
+                    is_amount = key in ("deposits", "withdrawals")
+                    diff_info = differences.get(key)
+                    if rep is None:
+                        rep_display = "—"
+                    elif is_amount:
+                        rep_display = f"${float(rep):,.2f}"
+                    else:
+                        rep_display = f"{int(rep)}"
+                    if comp is None:
+                        comp_display = "—"
+                    elif is_amount:
+                        comp_display = f"${float(comp):,.2f}"
+                    else:
+                        comp_display = f"{int(comp)}"
+                    if diff_info is None:
+                        diff_display = "✅ match"
+                    elif is_amount:
+                        diff_display = f"⚠️ off by ${diff_info['diff']:+,.2f}"
+                    else:
+                        diff_display = f"⚠️ off by {diff_info['diff']:+d}"
+                    rows.append(
+                        {
+                            "Field": key.title(),
+                            "Source (Grok TOTALS)": rep_display,
+                            "Detailed rows (computed)": comp_display,
+                            "Status": diff_display,
+                        }
+                    )
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                st.caption(
+                    "The whole statement is flagged for review. Re-check the detailed rows "
+                    "against the bank statement (or re-run Grok) before proceeding."
+                )
+            log_event(
+                LOGGER,
+                "bank_stmt_reconciliation_mismatch",
+                client=selected_client,
+                differences=", ".join(sorted((recon.get("differences") or {}).keys())),
+            )
+        else:
+            st.caption(
+                "ℹ️ No source TOTALS line available — reconciliation cross-check skipped "
+                "(parser path or older Grok output)."
+            )
+
         st.subheader("Transactions (review & edit)")
         conf_filter = st.radio(
             "Transaction filter",
@@ -1507,6 +1718,8 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             st.caption(f"Output CSV (header only): `{st.session_state['bank_stmt_csv_path']}`")
 
     _render_grok_vision_section(selected_client)
+
+    _render_grok_csv_paste_section(selected_client)
 
     st.divider()
     st.subheader("Link to revenue request")
