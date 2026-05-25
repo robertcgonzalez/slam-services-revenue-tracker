@@ -11,9 +11,13 @@ try:
     from bank_statements import (
         GROK_CSV_FIELDS,
         GROK_VISION_HINT,
+        PIVOT_GROUP_BY_OPTIONS,
+        PIVOT_VALUE_KIND_OPTIONS,
         ZERO_TRANSACTIONS_MSG,
         apply_payee_rules,
         build_grok_vision_prompt,
+        build_statement_pivot,
+        count_pattern_matches,
         filter_transactions_by_confidence,
         format_processing_log,
         load_grok_vision_csv,
@@ -21,9 +25,11 @@ try:
         missing_document_counts,
         reconcile_statement_totals,
         resolve_payee_rules_path,
+        rules_library_summary,
         run_statement_pipeline,
         scripts_available,
         style_low_confidence_rows,
+        suggest_payee_pattern,
         transaction_summary_metrics,
         upsert_payee_rule,
     )
@@ -101,6 +107,29 @@ except ImportError:
     def upsert_payee_rule(*_args, **_kwargs):
         return False, None
 
+    def suggest_payee_pattern(description, **_kwargs):
+        text = str(description or "").strip()
+        return text.split()[0] if text else ""
+
+    def count_pattern_matches(_df, _pattern, **_kwargs):
+        return 0
+
+    def rules_library_summary(_rules_df, **_kwargs):
+        import pandas as _pd
+
+        empty = _pd.DataFrame(
+            columns=["Pattern", "Clean Payee", "Suggested Category", "Scope", "Last used"]
+        )
+        return empty, {"total": 0, "client_specific": 0, "used_30d": 0}
+
+    def build_statement_pivot(_df, **_kwargs):
+        import pandas as _pd
+
+        return _pd.DataFrame()
+
+    PIVOT_GROUP_BY_OPTIONS = ("Category", "Payee")
+    PIVOT_VALUE_KIND_OPTIONS = ("sum", "count")
+
     from bank_statements import (
         missing_document_counts,
         run_statement_pipeline,
@@ -112,7 +141,7 @@ from diagnostics import get_app_info, get_app_user, get_data_freshness, get_oper
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.39"
+APP_VERSION = "v2.40"
 LOGGER = setup_app_logging()
 
 SLAM_CSS = """
@@ -1535,116 +1564,394 @@ def _render_payee_rules_controls(selected_client: str, txn_df: pd.DataFrame) -> 
     with st.expander("💡 Learn this mapping (teach a new rule)", expanded=False):
         if txn_df is None or txn_df.empty:
             st.info("Load transactions first, then return here to teach a rule.")
-            return
+        else:
+            _render_learn_mapping_form(selected_client, txn_df)
 
-        display_descriptions = txn_df["Description"].astype(str).tolist()
-        labels = [
-            f"#{i:>3} · {desc[:80]}" + (" …" if len(desc) > 80 else "")
-            for i, desc in enumerate(display_descriptions)
-        ]
-        choice = st.selectbox(
-            "Pick a transaction to learn from",
-            options=list(range(len(labels))),
-            format_func=lambda i: labels[i] if 0 <= i < len(labels) else f"#{i}",
-            key="bank_stmt_learn_row_pick",
+    _render_rules_library_expander(selected_client)
+
+
+def _render_learn_mapping_form(selected_client: str, txn_df: pd.DataFrame) -> None:
+    """Smart-default + reactive-preview Learn-this-mapping form (v2.40).
+
+    The pattern field lives OUTSIDE st.form so the "would affect X rows" preview
+    can re-render on every keystroke. Submit + other inputs stay inside the form
+    so we don't trigger noisy reruns on each character.
+    """
+
+    display_descriptions = txn_df["Description"].astype(str).tolist()
+    labels = [
+        f"#{i:>3} · {desc[:80]}" + (" …" if len(desc) > 80 else "")
+        for i, desc in enumerate(display_descriptions)
+    ]
+    choice = st.selectbox(
+        "Pick a transaction to learn from",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[i] if 0 <= i < len(labels) else f"#{i}",
+        key="bank_stmt_learn_row_pick",
+    )
+    if choice is None or choice < 0 or choice >= len(txn_df):
+        return
+
+    picked_row = txn_df.iloc[int(choice)]
+    picked_desc = str(picked_row.get("Description", "")).strip()
+    picked_payee = str(picked_row.get("Payee", "")).strip()
+    picked_cat = str(picked_row.get("Category", "")).strip()
+    st.caption(
+        f"Selected: **{picked_desc[:120]}** · "
+        f"current Payee: `{picked_payee or '—'}` · "
+        f"current Category: `{picked_cat or '—'}`"
+    )
+
+    # Smart default pattern from the selected row (strip noise prefixes, store #s,
+    # location codes). Recomputed only when the picked row changes so we don't
+    # overwrite Laura's edits on every rerun.
+    smart_default = suggest_payee_pattern(picked_desc)
+    last_idx_key = "bank_stmt_learn_last_row_idx"
+    if st.session_state.get(last_idx_key) != int(choice):
+        st.session_state["bank_stmt_learn_pattern"] = smart_default
+        st.session_state[last_idx_key] = int(choice)
+
+    # Pattern input OUTSIDE the form so Streamlit reruns the live preview as Laura types.
+    pattern_input = st.text_input(
+        "Match pattern (case-insensitive substring; prefix with `re:` for regex)",
+        help=(
+            "Smart-suggested from the selected description. Keep it short and unique "
+            "to the merchant — e.g. `WAL-MART` (not the full description). The rule "
+            "matches every description that contains this substring."
+        ),
+        key="bank_stmt_learn_pattern",
+    )
+
+    # Live impact preview — counts how many rows on THIS statement the pattern would touch.
+    if pattern_input and pattern_input.strip():
+        match_count = count_pattern_matches(txn_df, pattern_input, client_name=selected_client)
+        if match_count == 0:
+            st.caption(
+                f"⚠️ Pattern `{pattern_input.strip()}` matches **0 rows** on this "
+                "statement — double-check the spelling before saving."
+            )
+        elif match_count > 20:
+            st.caption(
+                f"⚠️ Pattern `{pattern_input.strip()}` would affect **{match_count} rows** — "
+                "that's broader than typical merchant rules. Consider tightening the pattern."
+            )
+        else:
+            st.caption(
+                f"✅ Pattern `{pattern_input.strip()}` would affect "
+                f"**{match_count} row(s)** on this statement."
+            )
+        log_event(
+            LOGGER,
+            "bank_stmt_payee_rule_preview",
+            client=selected_client,
+            pattern=pattern_input.strip()[:80],
+            match_count=int(match_count),
         )
-        if choice is None or choice < 0 or choice >= len(txn_df):
-            return
 
-        picked_row = txn_df.iloc[int(choice)]
-        picked_desc = str(picked_row.get("Description", "")).strip()
-        picked_payee = str(picked_row.get("Payee", "")).strip()
-        picked_cat = str(picked_row.get("Category", "")).strip()
+    with st.form("bank_stmt_learn_form", clear_on_submit=False):
+        clean_input = st.text_input(
+            "Clean Payee",
+            value=picked_payee or "",
+            key="bank_stmt_learn_clean_payee",
+        )
+        category_input = st.text_input(
+            "Suggested Category (optional)",
+            value=(picked_cat if picked_cat.lower() not in ("", "uncategorized") else ""),
+            key="bank_stmt_learn_category",
+        )
+        scope_specific = st.checkbox(
+            f"Apply only to **{selected_client}** (client-specific override)",
+            value=False,
+            key="bank_stmt_learn_scope_specific",
+        )
+        notes_input = st.text_input(
+            "Notes (optional)",
+            value="",
+            key="bank_stmt_learn_notes",
+        )
+        submitted = st.form_submit_button("💾 Save mapping", type="primary")
+
+    if not submitted:
+        return
+
+    pattern_value = st.session_state.get("bank_stmt_learn_pattern", "")
+    if not pattern_value or not pattern_value.strip():
+        st.warning("Pattern cannot be blank.")
+        return
+    if not clean_input.strip():
+        st.warning("Clean Payee cannot be blank.")
+        return
+    override = selected_client if scope_specific else ""
+    # Snapshot the picked row's Payee BEFORE save so we can show a clean before→after diff.
+    before_payee = picked_payee or "(blank)"
+    try:
+        ok, saved_path = upsert_payee_rule(
+            pattern=pattern_value,
+            clean_payee=clean_input,
+            suggested_category=category_input,
+            client_override=override,
+            notes=notes_input,
+        )
+    except Exception as exc:
+        st.error(f"Could not save rule: {exc}")
+        log_event(LOGGER, "bank_stmt_payee_rule_save_error", error=str(exc)[:200])
+        return
+
+    if not ok:
+        st.error(
+            "Could not write to `Data/payee_rules.csv`. Check folder "
+            "permissions or set the `SLAM_PAYEE_RULES_PATH` environment variable."
+        )
+        return
+
+    log_event(
+        LOGGER,
+        "bank_stmt_payee_rule_learned",
+        client=selected_client,
+        pattern=pattern_value.strip()[:80],
+        clean_payee=clean_input.strip()[:80],
+        client_specific=bool(override),
+    )
+
+    rows_changed = 0
+    after_payee = before_payee
+    try:
+        updated, info = apply_payee_rules(
+            st.session_state.get("bank_stmt_txn_df"),
+            client_name=selected_client,
+        )
+        st.session_state["bank_stmt_txn_df"] = updated
+        st.session_state["bank_stmt_rules_info"] = info
+        rows_changed = int((info or {}).get("rows_changed", 0))
+        if updated is not None and int(choice) < len(updated):
+            after_payee = str(updated.iloc[int(choice)].get("Payee", "")).strip() or "(blank)"
+    except Exception as exc:
+        log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
+
+    st.success(
+        f"Saved rule **{pattern_value.strip()} → {clean_input.strip()}** to "
+        f"`{saved_path}`. Reapplied across the current statement."
+    )
+    if before_payee != after_payee:
         st.caption(
-            f"Selected: **{picked_desc[:120]}** · "
-            f"current Payee: `{picked_payee or '—'}` · "
-            f"current Category: `{picked_cat or '—'}`"
+            f"Selected row Payee: `{before_payee}` → `{after_payee}` "
+            f"({rows_changed} row(s) updated in this run)."
+        )
+    elif rows_changed == 0:
+        st.warning(
+            "Rule saved but matched 0 rows on this statement after apply — your "
+            "manual edits may have prevented overwrite. The rule will still apply "
+            "to future statements with blank/default Payee values."
+        )
+    st.rerun()
+
+
+def _render_rules_library_expander(selected_client: str) -> None:
+    """Read-only Rules Library quick view — top 25 rules with scope + sort filters."""
+
+    with st.expander("📚 Rules Library", expanded=False):
+        try:
+            rules_df = load_payee_rules()
+        except Exception as exc:
+            st.warning(f"Could not load rules library: {exc}")
+            return
+
+        if rules_df is None or rules_df.empty:
+            st.info(
+                "No rules saved yet. Use **💡 Learn this mapping** above to teach "
+                "the first rule — it will appear here once saved."
+            )
+            return
+
+        ctl_col1, ctl_col2 = st.columns([1, 1])
+        with ctl_col1:
+            scope = st.radio(
+                "Scope",
+                options=["All", "Global only", f"{selected_client} only"],
+                index=0,
+                horizontal=True,
+                key="bank_stmt_rules_library_scope",
+            )
+        with ctl_col2:
+            sort_by = st.selectbox(
+                "Sort",
+                options=["Recently used", "Most specific", "Alphabetical"],
+                index=0,
+                key="bank_stmt_rules_library_sort",
+            )
+
+        # Normalize scope label for the helper ("<client> only" → "Client only").
+        scope_norm = scope
+        if scope.endswith(" only") and not scope.startswith("Global"):
+            scope_norm = "Client only"
+
+        view, summary = rules_library_summary(
+            rules_df,
+            client_name=selected_client,
+            scope=scope_norm,
+            sort_by=sort_by,
+            limit=25,
         )
 
-        with st.form("bank_stmt_learn_form", clear_on_submit=False):
-            default_pattern = picked_desc.split()[0] if picked_desc else ""
-            pattern_input = st.text_input(
-                "Match pattern (case-insensitive substring; prefix with `re:` for regex)",
-                value=default_pattern,
-                help=(
-                    "Tip: keep the pattern short and unique to the merchant — e.g. "
-                    "`WAL-MART` (not the full description). The rule will match every "
-                    "description that contains this substring."
-                ),
-                key="bank_stmt_learn_pattern",
-            )
-            clean_input = st.text_input(
-                "Clean Payee",
-                value=picked_payee or "",
-                key="bank_stmt_learn_clean_payee",
-            )
-            category_input = st.text_input(
-                "Suggested Category (optional)",
-                value=(picked_cat if picked_cat.lower() not in ("", "uncategorized") else ""),
-                key="bank_stmt_learn_category",
-            )
-            scope_specific = st.checkbox(
-                f"Apply only to **{selected_client}** (client-specific override)",
-                value=False,
-                key="bank_stmt_learn_scope_specific",
-            )
-            notes_input = st.text_input(
-                "Notes (optional)",
-                value="",
-                key="bank_stmt_learn_notes",
-            )
-            submitted = st.form_submit_button("💾 Save mapping", type="primary")
+        st.caption(
+            f"**{summary['total']}** total rule(s) · "
+            f"**{summary['client_specific']}** client-specific · "
+            f"**{summary['used_30d']}** used in the last 30 days"
+        )
 
-        if submitted:
-            if not pattern_input.strip():
-                st.warning("Pattern cannot be blank.")
-                return
-            if not clean_input.strip():
-                st.warning("Clean Payee cannot be blank.")
-                return
-            override = selected_client if scope_specific else ""
-            try:
-                ok, saved_path = upsert_payee_rule(
-                    pattern=pattern_input,
-                    clean_payee=clean_input,
-                    suggested_category=category_input,
-                    client_override=override,
-                    notes=notes_input,
-                )
-            except Exception as exc:
-                st.error(f"Could not save rule: {exc}")
-                log_event(LOGGER, "bank_stmt_payee_rule_save_error", error=str(exc)[:200])
-                return
+        if view.empty:
+            st.info("No rules match the current filters.")
+        else:
+            st.dataframe(view, width="stretch", hide_index=True)
 
-            if not ok:
-                st.error(
-                    "Could not write to `Data/payee_rules.csv`. Check folder "
-                    "permissions or set the `SLAM_PAYEE_RULES_PATH` environment variable."
-                )
-                return
+        st.caption(
+            "To edit or delete a rule, open `Data/payee_rules.csv` in Excel. "
+            "Changes take effect on the next **Apply Payee Rules** click."
+        )
 
+        # Lightweight audit hook — gated by session state so we log once per filter change.
+        snapshot = f"{scope_norm}|{sort_by}|{summary['total']}"
+        if st.session_state.get("bank_stmt_rules_library_last_snapshot") != snapshot:
+            st.session_state["bank_stmt_rules_library_last_snapshot"] = snapshot
             log_event(
                 LOGGER,
-                "bank_stmt_payee_rule_learned",
+                "bank_stmt_payee_rules_library_viewed",
                 client=selected_client,
-                pattern=pattern_input.strip()[:80],
-                clean_payee=clean_input.strip()[:80],
-                client_specific=bool(override),
+                scope=scope_norm,
+                sort_by=sort_by,
+                rule_count=int(summary["total"]),
             )
-            try:
-                updated, info = apply_payee_rules(
-                    st.session_state.get("bank_stmt_txn_df"),
-                    client_name=selected_client,
-                )
-                st.session_state["bank_stmt_txn_df"] = updated
-                st.session_state["bank_stmt_rules_info"] = info
-            except Exception as exc:
-                log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
-            st.success(
-                f"Saved rule **{pattern_input.strip()} → {clean_input.strip()}** to "
-                f"`{saved_path}`. Reapplied across the current statement."
+
+
+def _render_statement_pivot_section(selected_client: str, txn_df: pd.DataFrame) -> None:
+    """📊 Statement Summary — in-app pivot view (v2.40, first step toward Power Query independence).
+
+    Aggregates the current statement by Category or Payee across YearMonth columns using
+    pandas.pivot_table. Defaults to **Category × YearMonth, sum of SignedAmount** which is
+    the most common bookkeeping view. Quick buttons set sensible presets; the full pivot CSV
+    is exportable separately. The existing Download transactions CSV button (Power Query
+    safety net) is preserved unchanged below this section.
+    """
+
+    st.subheader("📊 Statement Summary")
+    st.caption(
+        "In-app pivot view — group by Category or Payee across YearMonth. "
+        "The detailed CSV download below remains available for Power Query."
+    )
+
+    # Seed defaults BEFORE any widget renders so the preset buttons + widgets share state
+    # without tripping Streamlit's "value/index AND key already in session_state" rules.
+    st.session_state.setdefault("bank_stmt_pivot_group_by", "Category")
+    st.session_state.setdefault("bank_stmt_pivot_kind", "sum")
+    st.session_state.setdefault("bank_stmt_pivot_uncategorized", False)
+
+    # Preset buttons mutate session state BEFORE the corresponding widgets render below.
+    preset_col1, preset_col2, preset_col3, preset_col4 = st.columns(4)
+    with preset_col1:
+        if st.button("📁 By Category", key="bank_stmt_pivot_by_cat"):
+            st.session_state["bank_stmt_pivot_group_by"] = "Category"
+            st.session_state["bank_stmt_pivot_uncategorized"] = False
+            st.session_state["bank_stmt_pivot_kind"] = "sum"
+    with preset_col2:
+        if st.button("👥 By Payee", key="bank_stmt_pivot_by_payee"):
+            st.session_state["bank_stmt_pivot_group_by"] = "Payee"
+            st.session_state["bank_stmt_pivot_uncategorized"] = False
+            st.session_state["bank_stmt_pivot_kind"] = "sum"
+    with preset_col3:
+        if st.button("❓ Uncategorized Only", key="bank_stmt_pivot_uncat"):
+            st.session_state["bank_stmt_pivot_group_by"] = "Payee"
+            st.session_state["bank_stmt_pivot_uncategorized"] = True
+            st.session_state["bank_stmt_pivot_kind"] = "sum"
+    with preset_col4:
+        export_placeholder = st.empty()
+
+    kind_labels = {"sum": "Sum of SignedAmount", "count": "Count of transactions"}
+
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([1, 1, 1])
+    with ctrl_col1:
+        group_by = st.radio(
+            "Group by",
+            options=list(PIVOT_GROUP_BY_OPTIONS),
+            horizontal=True,
+            key="bank_stmt_pivot_group_by",
+        )
+    with ctrl_col2:
+        kind_choice = st.selectbox(
+            "Values",
+            options=list(kind_labels.keys()),
+            format_func=lambda k: kind_labels[k],
+            key="bank_stmt_pivot_kind",
+        )
+    with ctrl_col3:
+        uncategorized_only = st.checkbox(
+            "Uncategorized only",
+            help="Filter to rows where Category is blank or 'Uncategorized'.",
+            key="bank_stmt_pivot_uncategorized",
+        )
+
+    try:
+        pivot = build_statement_pivot(
+            txn_df,
+            group_by=group_by,
+            value_kind=kind_choice,
+            uncategorized_only=uncategorized_only,
+        )
+    except Exception as exc:
+        st.warning(f"Could not build pivot summary: {exc}")
+        return
+
+    if pivot is None or pivot.empty:
+        if uncategorized_only:
+            st.info(
+                "✅ No Uncategorized transactions — every row has a category. "
+                "Switch off the filter to see the full pivot."
             )
-            st.rerun()
+        else:
+            st.info("No data to pivot. Load a statement and apply rules first.")
+        return
+
+    # Format the display copy: dollars get $ + 2 decimals; counts stay as integers.
+    display = pivot.copy()
+    if kind_choice == "sum":
+        formatter = {col: "${:,.2f}" for col in display.columns}
+        st.dataframe(display.style.format(formatter), width="stretch")
+    else:
+        st.dataframe(display, width="stretch")
+
+    st.caption(
+        f"{len(pivot)} row(s) · {len(pivot.columns) - 1} month column(s) + Total · "
+        f"sorted by {'absolute total' if kind_choice == 'sum' else 'transaction count'} (descending)."
+    )
+
+    # Export — pivot-only CSV; the full 12-column CSV download remains below.
+    pivot_buf = io.StringIO()
+    pivot.to_csv(pivot_buf)
+    file_safe_client = selected_client.replace(" ", "_")
+    file_safe_group = group_by.lower()
+    suffix = "_uncategorized" if uncategorized_only else ""
+    with export_placeholder.container():
+        st.download_button(
+            "📥 Export Pivot CSV",
+            pivot_buf.getvalue(),
+            file_name=f"{file_safe_client}_pivot_{file_safe_group}_{kind_choice}{suffix}.csv",
+            mime="text/csv",
+            key="bank_stmt_pivot_export",
+            help="Pivot summary only — full transaction CSV stays available below.",
+        )
+
+    # Audit hook — once per snapshot change.
+    snapshot = f"{group_by}|{kind_choice}|{uncategorized_only}|{len(pivot)}"
+    if st.session_state.get("bank_stmt_pivot_last_snapshot") != snapshot:
+        st.session_state["bank_stmt_pivot_last_snapshot"] = snapshot
+        log_event(
+            LOGGER,
+            "bank_stmt_pivot_viewed",
+            client=selected_client,
+            group_by=group_by,
+            value_kind=kind_choice,
+            uncategorized_only=bool(uncategorized_only),
+            rows=int(len(pivot)),
+        )
 
 
 def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None:
@@ -1978,6 +2285,15 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
             key="bank_stmt_txn_editor",
         )
 
+        # --- In-app Statement Summary (v2.40) — pivot view directly in the app ---
+        # First step toward reducing long-term Power Query reliance. The Download
+        # transactions CSV button below is preserved as the Power Query safety net.
+        _render_statement_pivot_section(selected_client, txn_df)
+
+        st.caption(
+            "💾 **Power Query safety net**: download the full 12-column CSV below to keep "
+            "the existing Process-Statement.ps1 / Excel workflow available."
+        )
         buf = io.StringIO()
         txn_df.to_csv(buf, index=False)
         st.download_button(

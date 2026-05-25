@@ -210,6 +210,252 @@ def _compile_rule_pattern(pattern: str) -> re.Pattern[str] | None:
         return None
 
 
+# Noise prefixes routinely found on bank-statement descriptions. Stripping these
+# before suggesting a pattern lets us surface the actual merchant token instead
+# of generic words like "POS" or "ACH" that would match every debit-card row.
+# Order matters: longer prefixes first so we don't half-strip a phrase.
+_PAYEE_NOISE_PREFIXES: tuple[str, ...] = (
+    "DEBIT CARD PURCHASE",
+    "CHECK CARD PURCHASE",
+    "POS DEBIT PURCHASE",
+    "POS PURCHASE",
+    "POS DEBIT",
+    "ACH DEBIT",
+    "ACH CREDIT",
+    "ACH DEPOSIT",
+    "ACH WITHDRAWAL",
+    "ACH PAYMENT",
+    "ELECTRONIC DEBIT",
+    "ELECTRONIC CREDIT",
+    "ELECTRONIC WITHDRAWAL",
+    "ELECTRONIC DEPOSIT",
+    "ONLINE BANKING TRANSFER",
+    "ONLINE BANKING",
+    "ONLINE PAYMENT",
+    "MOBILE DEPOSIT",
+    "EXTERNAL TRANSFER",
+    "INTERNAL TRANSFER",
+    "ATM WITHDRAWAL",
+    "ATM DEPOSIT",
+    "WIRE TRANSFER",
+    "BILL PAYMENT",
+    "CHECK #",
+    "CHECK#",
+    "WITHDRAWAL",
+    "DEPOSIT",
+)
+
+# Tokens that indicate the merchant portion is over (location codes, store #s,
+# transaction IDs, dates embedded in the description). We trim everything from
+# the first such token onwards when suggesting a pattern.
+_PAYEE_STOP_TOKEN_RE = re.compile(
+    r"""(?ix)
+    (
+        \#?\d{2,}                                # STORE #1234, 123456
+      | \b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b         # 06/15 or 6/15/26
+      | \b(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b
+      | \bUS[A]?\b
+    )
+    """
+)
+
+
+def suggest_payee_pattern(description: str, *, max_length: int = 32) -> str:
+    """Suggest a sensible match pattern for the Learn-this-mapping form.
+
+    Strips common noise prefixes (POS PURCHASE, ACH DEBIT, etc.), trims trailing
+    location codes / store numbers / dates, and returns a bounded substring that
+    captures the merchant portion. Falls back to the first non-empty token when
+    the description doesn't contain a clear merchant signal (e.g. "CHECK 2473").
+
+    The result is intentionally a substring (not regex). The Learn form treats
+    it as a default that Laura can edit before saving — the goal is to save her
+    keystrokes on the common cases, not to be perfect.
+    """
+
+    if not description:
+        return ""
+    cleaned = " ".join(str(description).split()).strip()
+    if not cleaned:
+        return ""
+
+    # Strip a single recognized noise prefix (longest match wins).
+    upper = cleaned.upper()
+    for prefix in _PAYEE_NOISE_PREFIXES:
+        if upper.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].lstrip(" -:#*")
+            break
+
+    if not cleaned:
+        cleaned = " ".join(str(description).split()).strip()
+
+    # Trim at the first stop token (store #, date, state code) — keeps "WAL-MART"
+    # but drops "STORE #1234 GARDENDALE AL".
+    stop_match = _PAYEE_STOP_TOKEN_RE.search(cleaned)
+    if stop_match and stop_match.start() > 0:
+        cleaned = cleaned[: stop_match.start()].strip(" -:#*,")
+
+    # Bound the length so the default stays readable in the text input.
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length].rstrip(" -:#*,")
+
+    if not cleaned:
+        # Fallback: first non-empty token from the original description.
+        for token in str(description).split():
+            stripped = token.strip(" -:#*,")
+            if stripped:
+                return stripped[:max_length]
+        return ""
+
+    return cleaned
+
+
+def count_pattern_matches(
+    df: pd.DataFrame | None,
+    pattern: str,
+    client_name: str | None = None,
+) -> int:
+    """Count rows in ``df`` whose Description would match the given rule pattern.
+
+    Powers the live "this pattern would affect X rows" preview in the Learn form.
+    Uses the same compilation rules as :func:`apply_payee_rules` (case-insensitive
+    substring by default, full regex with ``re:`` prefix). ``client_name`` is
+    accepted for symmetry with the rules engine but currently doesn't filter the
+    DataFrame — the preview always counts against the open statement.
+    """
+
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return 0
+    if "Description" not in df.columns:
+        return 0
+    matcher = _compile_rule_pattern(pattern)
+    if matcher is None:
+        return 0
+    try:
+        return int(df["Description"].astype(str).str.contains(matcher, regex=True, na=False).sum())
+    except re.error:
+        return 0
+
+
+def _relative_last_used(value: str) -> str:
+    """Render a `last_used` ISO date as a friendly relative string for the Library view."""
+
+    raw = (value or "").strip()
+    if not raw:
+        return "—"
+    try:
+        when = datetime.strptime(raw[:10], "%Y-%m-%d")
+    except ValueError:
+        return raw
+    days = (datetime.now().date() - when.date()).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return f"{days} days ago"
+    if days < 30:
+        weeks = days // 7
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    if days < 365:
+        months = days // 30
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    return raw
+
+
+def rules_library_summary(
+    rules_df: pd.DataFrame | None,
+    *,
+    client_name: str | None = None,
+    scope: str = "All",
+    sort_by: str = "Recently used",
+    limit: int = 25,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Return a display-ready DataFrame for the Rules Library expander plus summary counts.
+
+    ``scope`` is one of ``"All"``, ``"Global only"``, or ``"Client only"`` (the
+    latter filters to ``client_override == client_name``). ``sort_by`` is one of
+    ``"Recently used"`` (default), ``"Most specific"`` (longest pattern first),
+    or ``"Alphabetical"`` (pattern ascending).
+
+    The returned summary dict has keys ``total``, ``client_specific``, and
+    ``used_30d`` so the UI can render a one-line "X total · Y client-specific ·
+    Z used in last 30 days" caption above the table.
+    """
+
+    empty_view = pd.DataFrame(
+        columns=["Pattern", "Clean Payee", "Suggested Category", "Scope", "Last used"]
+    )
+    summary = {"total": 0, "client_specific": 0, "used_30d": 0}
+
+    if rules_df is None or not isinstance(rules_df, pd.DataFrame) or rules_df.empty:
+        return empty_view, summary
+
+    df = rules_df.copy()
+    for col in PAYEE_RULES_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df["client_override"] = df["client_override"].astype(str).str.strip()
+    df["pattern"] = df["pattern"].astype(str).str.strip()
+    df = df[df["pattern"] != ""].copy()
+
+    summary["total"] = int(len(df))
+    summary["client_specific"] = int((df["client_override"] != "").sum())
+
+    # 30-day usage count uses the master file (unfiltered) so the headline stays stable.
+    cutoff = datetime.now().date()
+    used_30d = 0
+    for raw in df["last_used"].astype(str):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            when = datetime.strptime(raw[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (cutoff - when).days <= 30:
+            used_30d += 1
+    summary["used_30d"] = used_30d
+
+    # Scope filter
+    scope_norm = (scope or "All").strip().lower()
+    if scope_norm in ("global", "global only"):
+        df = df[df["client_override"] == ""].copy()
+    elif scope_norm in ("client", "client only") and client_name:
+        df = df[df["client_override"].str.lower() == client_name.strip().lower()].copy()
+
+    if df.empty:
+        return empty_view, summary
+
+    # Sort
+    sort_norm = (sort_by or "Recently used").strip().lower()
+    if sort_norm.startswith("most specific"):
+        df["_plen"] = df["pattern"].str.len()
+        df = df.sort_values(by=["_plen", "pattern"], ascending=[False, True])
+        df = df.drop(columns=["_plen"])
+    elif sort_norm.startswith("alphabet"):
+        df = df.sort_values(by="pattern", ascending=True)
+    else:
+        # Recently used (default) — empty last_used sinks to the bottom.
+        df["_lu"] = pd.to_datetime(df["last_used"].astype(str).str[:10], errors="coerce")
+        df = df.sort_values(by="_lu", ascending=False, na_position="last")
+        df = df.drop(columns=["_lu"])
+
+    if limit and limit > 0:
+        df = df.head(limit)
+
+    view = pd.DataFrame(
+        {
+            "Pattern": df["pattern"].astype(str),
+            "Clean Payee": df["clean_payee"].astype(str),
+            "Suggested Category": df["suggested_category"].astype(str),
+            "Scope": df["client_override"].astype(str).where(df["client_override"] != "", "Global"),
+            "Last used": df["last_used"].astype(str).map(_relative_last_used),
+        }
+    ).reset_index(drop=True)
+    return view, summary
+
+
 def apply_payee_rules(
     df: pd.DataFrame,
     client_name: str | None = None,
@@ -460,6 +706,17 @@ Column rules:
 - `Confidence` = `High` if you are sure, `Medium` if image was hard to read, `Low` for guesses.
 - `NeedsReview` = `Yes` when Confidence is Medium or Low, otherwise `No`.
 - `ReviewReason` = short note when NeedsReview is Yes; blank otherwise.
+
+Common failure modes to avoid (these are the three I see most often):
+- DUAL AMOUNTS: When a row has two numbers (the transaction amount AND a running balance to its right),
+  use the LEFT/transaction amount only. The rightmost number is the post-transaction balance and is
+  NOT a transaction. Example: `01/15 WAL-MART STORE #1234 250.00 6,079.01` → Amount is `-250.00`, NOT `-6079.01`.
+- CHECK REGISTER: Rows like `2473 * 01/15 250.00 6,079.01` are check entries. Set `Check#` = `2473`,
+  `Date` = `01/15` (formatted to `YYYY-MM-DD` with the statement year), `Amount` = `-250.00` (checks
+  are always debits — negative), and ignore the trailing balance (`6,079.01`).
+- MULTI-PAGE: Read every page of the PDF. Do not stop at page 1. The Check Register section often
+  starts on page 2 or 3, and Electronic Debits / Service Charges frequently spill onto a later page.
+  Include ALL transactions from ALL pages in a single CSV.
 
 After the CSV, on a single final line, write:
 TOTALS: deposits=<sum_positive> withdrawals=<sum_negative_abs> checks=<count> transactions=<total_count>
@@ -1068,12 +1325,16 @@ __all__ = [
     "GROK_VISION_HINT",
     "PAYEE_RULES_COLUMNS",
     "PAYEE_RULES_FILENAME",
+    "PIVOT_GROUP_BY_OPTIONS",
+    "PIVOT_VALUE_KIND_OPTIONS",
     "RECONCILIATION_AMOUNT_TOLERANCE",
     "UPLOAD_WORK_DIR",
     "ZERO_TRANSACTIONS_MSG",
     "apply_payee_rules",
     "build_grok_vision_prompt",
+    "build_statement_pivot",
     "confidence_review_count",
+    "count_pattern_matches",
     "cropper_available",
     "expected_csv_path",
     "extract_pdf_raw_text",
@@ -1084,10 +1345,12 @@ __all__ = [
     "missing_document_counts",
     "reconcile_statement_totals",
     "resolve_payee_rules_path",
+    "rules_library_summary",
     "run_statement_pipeline",
     "save_payee_rules",
     "scripts_available",
     "style_low_confidence_rows",
+    "suggest_payee_pattern",
     "transaction_summary_metrics",
     "upsert_payee_rule",
 ]
@@ -1162,6 +1425,119 @@ def _checks_count(df: pd.DataFrame) -> int:
 
     s = df["Check#"].astype(str).str.strip()
     return int((s != "").sum())
+
+
+# ---------------------------------------------------------------------------
+# In-app pivot summary (v2.40) — first step toward reducing Power Query reliance
+# ---------------------------------------------------------------------------
+# `build_statement_pivot()` aggregates the current statement's transactions by
+# Category or Payee across YearMonth columns using pandas.pivot_table. The
+# Bank Statements page renders it directly below the transaction editor so
+# Laura can see the high-level picture without opening Excel. The existing
+# "Download transactions CSV" button stays in place as the Power Query safety
+# net — the pivot is additive, never a replacement.
+
+PIVOT_GROUP_BY_OPTIONS: tuple[str, ...] = ("Category", "Payee")
+PIVOT_VALUE_KIND_OPTIONS: tuple[str, ...] = ("sum", "count")
+
+
+def build_statement_pivot(
+    df: pd.DataFrame | None,
+    *,
+    group_by: str = "Category",
+    value_kind: str = "sum",
+    uncategorized_only: bool = False,
+) -> pd.DataFrame:
+    """Aggregate the current statement into a Category-or-Payee × YearMonth pivot.
+
+    - ``group_by``: ``"Category"`` (default) or ``"Payee"`` — the row index.
+    - ``value_kind``: ``"sum"`` (signed dollar total per cell) or ``"count"``
+      (transaction count per cell).
+    - ``uncategorized_only``: when True, filters to rows whose Category is blank
+      or literally ``Uncategorized`` so Laura can spot what still needs labels.
+
+    Returns a DataFrame with one row per ``group_by`` value, one column per
+    YearMonth, plus a trailing ``Total`` column sorted descending by absolute
+    total. Returns an empty DataFrame when the source is empty/missing — the
+    caller can render a friendly "no data" caption.
+    """
+
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame()
+
+    group_col = group_by if group_by in PIVOT_GROUP_BY_OPTIONS else "Category"
+    kind = value_kind if value_kind in PIVOT_VALUE_KIND_OPTIONS else "sum"
+
+    if group_col not in df.columns:
+        return pd.DataFrame()
+
+    work = df.copy()
+
+    # Normalize the row-index column so blanks don't fragment the pivot.
+    work[group_col] = work[group_col].astype(str).str.strip()
+    if group_col == "Category":
+        work.loc[work[group_col] == "", group_col] = "Uncategorized"
+    else:
+        work.loc[work[group_col] == "", group_col] = "(no payee)"
+
+    if uncategorized_only:
+        if "Category" not in work.columns:
+            return pd.DataFrame()
+        cat_norm = work["Category"].astype(str).str.strip().str.lower()
+        work = work[cat_norm.isin(["", "uncategorized"])].copy()
+        if work.empty:
+            return pd.DataFrame()
+
+    # Ensure we have a YearMonth column; derive from Date when missing/blank.
+    if "YearMonth" not in work.columns:
+        work["YearMonth"] = ""
+    ym = work["YearMonth"].astype(str).str.strip()
+    parsed_dates = pd.to_datetime(work.get("Date", ""), errors="coerce")
+    derived_ym = parsed_dates.dt.strftime("%Y-%m").fillna("")
+    work["YearMonth"] = ym.where(ym != "", derived_ym)
+    work.loc[work["YearMonth"] == "", "YearMonth"] = "(no date)"
+
+    # Choose the numeric column. SignedAmount is preferred (preserves debit sign);
+    # fall back to Amount when missing so older CSVs still work.
+    amount_col = "SignedAmount" if "SignedAmount" in work.columns else "Amount"
+    if amount_col not in work.columns:
+        return pd.DataFrame()
+    work[amount_col] = pd.to_numeric(
+        work[amount_col]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False),
+        errors="coerce",
+    ).fillna(0.0)
+
+    if kind == "count":
+        pivot = pd.pivot_table(
+            work,
+            index=group_col,
+            columns="YearMonth",
+            values=amount_col,
+            aggfunc="count",
+            fill_value=0,
+        )
+        pivot = pivot.astype(int)
+        pivot["Total"] = pivot.sum(axis=1).astype(int)
+        pivot = pivot.sort_values(by="Total", ascending=False)
+    else:
+        pivot = pd.pivot_table(
+            work,
+            index=group_col,
+            columns="YearMonth",
+            values=amount_col,
+            aggfunc="sum",
+            fill_value=0.0,
+        )
+        pivot = pivot.astype(float)
+        pivot["Total"] = pivot.sum(axis=1).astype(float)
+        # Sort by absolute total so the biggest movers (positive or negative) surface first.
+        pivot = pivot.assign(_abs=pivot["Total"].abs()).sort_values(by="_abs", ascending=False)
+        pivot = pivot.drop(columns=["_abs"])
+
+    return pivot
 
 
 # Penny-level tolerance for comparing reported vs. computed dollar totals.
