@@ -20,9 +20,17 @@
 
   // Pre-installed dev container "features" layered on top of the base
   // image. github-cli is useful for `gh pr create` / `gh issue list`
-  // workflows from inside the Codespace.
+  // workflows from inside the Codespace. sshd enables `gh codespace ssh`
+  // / `gh codespace cp` from a developer's local terminal — important
+  // for the v2.44 verification flow where the local PDF test fixture
+  // (`Data/Auto_Body_Center_Jan_26_Statement.pdf`) is gitignored and
+  // must be `scp`-copied into the Codespace before the Local Enhanced
+  // OCR pipeline can be exercised end-to-end.
   "features": {
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
   },
 
   // Codespaces machine sizing — the heavy OCR pipeline (easyocr pulls
