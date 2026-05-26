@@ -98,5 +98,10 @@
   "kilo-code.new.showTaskTimeline": true,
 
   // Azure
-  "azureResourceGroups.showTags": true
+  "azureResourceGroups.showTags": true,
+  "cursorpyright.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}/App"
+  ],
+  "cursorpyright.analysis.typeCheckingMode": "basic"
 }
