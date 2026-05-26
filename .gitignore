@@ -110,3 +110,10 @@ node_modules/
 # Cursor rules (committed; rest of .cursor/ ignored above)
 !.cursor/rules/
 !.cursor/rules/**
+
+# ==================== Retired / Audit Artifacts ====================
+# Physical files from retired Kilo Code era + documentation coherence backups.
+# These were intentionally removed from git tracking (v2.44.2) and must stay untracked.
+Export-KiloCode-Output
+.kilocode
+docs-backups/
