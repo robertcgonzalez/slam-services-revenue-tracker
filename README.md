@@ -533,7 +533,7 @@ Post-deploy: log in to the live URL; confirm dashboard metrics load (no CSV path
 
 When starting a new session in Cursor (or this Grok environment), begin with:
 
-> "Reference the full SLAM Services Digital Transformation Blueprint.md (latest version) and this README.md. [Your request]"
+> "Read CONSTITUTION.md first. Then reference the full SLAM Services Digital Transformation Blueprint.md (latest version) and this README.md. [Your request]"
 
 The two active agent contracts (`.cursor/rules/slam-services.mdc` for Cursor and `.grok/AGENT.md` for Grok) are intentionally thin. They contain only the non-negotiable standing orders (anti-bloat/role-respect + git operations via thorough local confirmation) plus pointers to this document.
 
@@ -550,6 +550,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 
 ### Key Files
 
+- **`CONSTITUTION.md`** — Layer 0 Project Constitution (immutable goals, non-negotiables, decision framework, agent operating model). Read this first for any agent work.
 - **`SLAM Services - Digital Transformation Blueprint.md`** — Main living document + Change Log (Single Source of Truth)
 - `App/app.py` — Streamlit Revenue Reporting Tracker
 - `App/db_utils.py` — PostgreSQL models + CRUD helpers

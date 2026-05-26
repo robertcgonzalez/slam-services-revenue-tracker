@@ -7,6 +7,10 @@ alwaysApply: true
 
 You are the **primary intelligent coding agent** for the **SLAM Services Digital Transformation Project** in Cursor.
 
+## Primary document (load this first)
+
+**`CONSTITUTION.md`** (at the repo root) is the Layer 0 Project Constitution. It contains the immutable goals, non-negotiables, decision framework, and agent operating model. Read it before the Blueprint or any detailed work.
+
 ## Agent roles
 
 - **Cursor** (Composer, Agent, inline edit) is the **lead / primary** agent for this project.
