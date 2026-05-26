@@ -3,7 +3,7 @@ description: SLAM Services project — Blueprint SSoT, Cursor primary lead agent
 alwaysApply: true
 ---
 
-# SLAM Services — Cursor (Primary) + Kilo Code (Secondary)
+# SLAM Services — Cursor (Primary) + Grok (Secondary)
 
 You are the **primary intelligent coding agent** for the **SLAM Services Digital Transformation Project** in Cursor.
 
@@ -11,14 +11,18 @@ You are the **primary intelligent coding agent** for the **SLAM Services Digital
 
 - **Cursor** (Composer, Agent, inline edit) is the **lead / primary** agent for this project.
 - You have **full authority** to explore the codebase, make edits, run verification commands, and update living documents per Blueprint rules — without waiting for secondary tooling.
-- **Kilo Code** (`kilocode.kilo-code`) is **secondary / supportive** only — use when the user explicitly prefers it or for narrow tasks; it must not override Cursor’s lead role or project rules.
-- Align with `.kilocode` at the repo root for shared principles; **Cursor leads** when guidance differs.
+- **Grok** (this environment / instant agent) is the official **secondary** agent. It does not override Cursor’s lead role or project rules.
 
-## Single source of truth
+## Core standing orders (mandatory on every documentation or rules change)
+
+- **Anti-bloat / role-respect**: Before any documentation edit, explicitly review the defined purpose of each document per the Documentation Roles Matrix in README. Never introduce duplication. Content must live in exactly one place according to the roles. If content belongs elsewhere, move or reference instead of copying. "There should never be duplication on the documents."
+- **Git authority via confirmation**: Agents have authority to perform git operations (add, commit, push, etc.) provided they first execute and visibly log a full local verification sequence: `git status`, `git diff --cached --stat`, `git check-ignore -v` (especially on sensitive patterns), explicit confirmation that no client data, secrets, `*.csv`, `*.zip`, logs, `.env`, or deploy artifacts are staged, plus a clear before/after summary for the user. The security invariants remain absolute.
+
+## Single source of truth & living documents
 
 - **`SLAM Services - Digital Transformation Blueprint.md`** — living document; read before substantive work.
-- **`README.md`** — onboarding and current status.
-- After significant work, **bump the Blueprint version** and add a concise **Change Log** entry (e.g. v2.15).
+- **`README.md`** — onboarding, current status, and the single Documentation Roles Matrix (the authoritative map of every document’s purpose).
+- After significant work, **bump the Blueprint version** and add a concise **Change Log** entry.
 
 ## Core principles
 
@@ -32,9 +36,9 @@ You are **explicitly authorized** to update, when pertinent:
 
 - Blueprint.md (especially Change Log and version/status header)
 - README.md (onboarding and workflow)
-- `.cursor/rules/` and `.kilocode` (agent and project rules)
+- `.cursor/rules/` and the Grok context file (agent rules)
 
-Keep updates factual, versioned, and focused — no speculative rewrites.
+Keep updates factual, versioned, and focused — no speculative rewrites. Always follow the anti-bloat standing order above.
 
 ## Tech stack conventions
 
@@ -51,16 +55,10 @@ Keep updates factual, versioned, and focused — no speculative rewrites.
 - Python changes → `ruff check` / `ruff format` on `App` and `Scripts`.
 - Deploy-related changes → confirm zip layout (`requirements.txt`, `App/`, `Data/`, `startup.sh` at root).
 
-## Git practices
-
-- **Commit only when the user explicitly asks** (or the task includes commit/push steps). Otherwise: propose commands, stage lists, and messages — do not commit autonomously.
-- **Security-first**: Respect `.gitignore`. Never stage or commit `Data/`, `**/*.csv`, `**/*.xlsx`, `.env`, secrets, `*.zip`, `*.log`, `*.bak`, `Project-Structure-Report.txt`, or local-only docs (e.g. `Business problem.docx`). Use explicit `git add <paths>` — never `git add .` without review.
-- **When committing** (user-requested): run `git status` and `git diff --cached --stat` before commit; confirm no client/sensitive paths staged. Tie messages to Blueprint version and Phase (e.g. `v2.24: …`). After meaningful pushes, bump Blueprint version + Change Log.
-- **Tracked-but-ignored files**: If a path is in `.gitignore` but still tracked, use `git rm --cached <file>` (keeps local copy) in a focused commit — do not delete the local file.
-- **Post-change checks**: `git status`; `git check-ignore -v` on sensitive paths when `.gitignore` changes; `ruff check App/app.py` when app code changed.
-
 ## Style
 
 - Match existing code style; minimal scope; no over-engineering.
 - Professional Streamlit UI; clear comments only for non-obvious business logic.
 - Suggest terminal commands (`git`, `az`, `streamlit`, `ruff`) when helpful.
+
+**Full principles, agent workflow, and the Documentation Roles Matrix live in README ("How to Work with Cursor (Primary) + Grok (Secondary)").**

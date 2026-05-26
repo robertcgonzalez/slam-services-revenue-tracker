@@ -523,17 +523,30 @@ Post-deploy: log in to the live URL; confirm dashboard metrics load (no CSV path
 
 ---
 
-## How to Work with Cursor + Kilo Code
+## How to Work with Cursor (Primary) + Grok (Secondary)
 
-**Cursor** (Composer / Agent / inline edit) is the **primary / lead** AI coding agent for this project. **Kilo Code** remains available as a **secondary** tool when you want an alternate workflow — it does not override Cursor’s lead role.
+**Cursor** (Composer / Agent / inline edit) is the **primary / lead** AI coding agent for this project. **Grok** (this environment / instant agent) is the official **secondary** agent. Neither overrides the other; both follow the same project rules.
 
-When starting a new session in Cursor, begin with:
+When starting a new session in Cursor (or this Grok environment), begin with:
 
 > "Reference the full SLAM Services Digital Transformation Blueprint.md (latest version) and this README.md. [Your request]"
 
+The two active agent contracts (`.cursor/rules/slam-services.mdc` for Cursor and `SLAM-Grok-Context.md` for Grok) are intentionally thin. They contain only the non-negotiable standing orders (anti-bloat/role-respect + git operations via thorough local confirmation) plus pointers to this document.
+
+### Documentation Roles Matrix
+
+This is the **single authoritative map** of every document’s defined purpose. It exists in exactly one place to prevent duplication and crossed wires.
+
+| Document | Primary Consumer | Defined Role & Purpose | What Belongs Here (and only here) | What Does **Not** Belong Here |
+|----------|------------------|------------------------|-----------------------------------|-------------------------------|
+| `SLAM Services - Digital Transformation Blueprint.md` | Humans + agents (deep reference) | **Living Single Source of Truth + complete project history**. The authoritative record of vision, architecture, decisions, roadmap, SDLC, and all major milestones. | Full Change Log (narrative history), executive summary, phased roadmap, technical architecture, stakeholder map, risk/decision logs, Section 14 feedback system, detailed "why" behind every significant change. | Day-to-day commands, quick-start recipes, injected agent constraints (keep thin), the "map" of which doc does what. |
+| `README.md` | Humans (onboarding + daily reference) + agents (cross-reference) | **Practical human onboarding, current status snapshot, command reference, and the single authoritative "Documentation Roles & Agent Workflow" guide**. The one place anyone looks first to understand how to work with the project and where information lives. | Current status banner, Codespaces / local dev / Azure deploy / health / UAT quick-start recipes, this Documentation Roles Matrix, folder structure, project goals. | Long historical narrative (belongs in Blueprint), hard agent prompt constraints (belong in the two injected contracts). |
+| `.cursor/rules/slam-services.mdc` | Cursor (Composer / Agent / inline edit) — **always injected** | **Lean, self-contained primary agent contract**. Contains only the non-negotiable rules that must be in Cursor's context window on every invocation. | Agent role declaration (Cursor lead), reference to Blueprint + README, the two core standing orders (anti-bloat/role-respect + git via thorough confirmation), security/Laura-confidence, verification habits, tech stack pointers, one-sentence pointer to this matrix. | Long explanations, history, commands, the full matrix (pointer only). Must stay minimal. |
+| `SLAM-Grok-Context.md` | Grok 4.3 (this TUI and other Grok-assisted sessions) — **secondary agent** | **Official Grok secondary agent context**. Carries the same hard constraints as the Cursor contract so Grok sessions stay consistent with project rules. | Same two core standing orders (anti-bloat + git confirmation), updated "Cursor primary + Grok secondary" reality, pointer to this matrix. Short and focused. | Anything that duplicates the Cursor contract or the human docs. |
+
 ### Key Files
 
-- **`SLAM Services - Digital Transformation Blueprint.md`** — Main living document + Change Log
+- **`SLAM Services - Digital Transformation Blueprint.md`** — Main living document + Change Log (Single Source of Truth)
 - `App/app.py` — Streamlit Revenue Reporting Tracker
 - `App/db_utils.py` — PostgreSQL models + CRUD helpers
 - `Scripts/init_db.py` — Idempotent schema initialization
@@ -547,12 +560,13 @@ When starting a new session in Cursor, begin with:
 - `App/app_logging.py` — Structured `slam_app` logs (Azure log stream)
 - `Scripts/PowerShell/Set-AzurePostgresAppSettings.ps1` — Enable/disable Postgres settings
 - `requirements.txt` — Python dependencies
-- `.cursor/rules/slam-services.mdc` — Cursor primary project rules (`alwaysApply`)
-- `.kilocode` — Shared agent principles (Cursor leads; Kilo secondary)
+- `.cursor/rules/slam-services.mdc` — Cursor primary project rules (`alwaysApply`) — contains the two core standing orders (anti-bloat + git confirmation)
 - `.vscode/` — Shared tasks, launch, lint/format settings
 - `.devcontainer/devcontainer.json` — **GitHub Codespaces dev container** (Python 3.10 + heavy OCR libs)
 - `.devcontainer/postCreateCommand.sh` — One-shot Codespaces provisioning (poppler, venv, OCR libs, EasyOCR pre-warm, aliases)
 - `Data/Revenue_Tracker_Migration/` — Source data (local; not in git)
+
+> **Note on legacy artifacts**: `.kilocode` and `Export-KiloCode-Output` are historical (Kilo Code era, retired). They are no longer referenced by active rules or workflows. See the Blueprint Change Log for the transition to the Cursor + Grok model.
 
 ---
 
