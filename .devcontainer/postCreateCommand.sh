@@ -91,7 +91,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4) Heavy Local Enhanced OCR libs (v2.43.2) — same set as the Azure
+# 4) Heavy Local Enhanced OCR libs (v2.44.3) — same set as the Azure
 #    OCR Function (`AzureFunctions/ocr_processor/requirements.txt`),
 #    minus `azure-functions`. Total install size ~1.5 GB (PyTorch is
 #    the bulk of that).

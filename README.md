@@ -9,13 +9,13 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ## 📌 Current Status (as of May 25, 2026 — Blueprint v2.44)
 
-- **Development Environment Migration (v2.44)** — **GitHub Codespaces is now the recommended dev environment** for the heavy Local Enhanced OCR pipeline. New `.devcontainer/` config provisions a fully-loaded Linux container (Python 3.10, poppler-utils, pdfplumber + pdf2image + easyocr + opencv-python-headless + pillow + numpy, EasyOCR English model pre-warmed) on every Codespace creation. Streamlit is auto-forwarded on port 8501. Smart resource-aware defaults: `SLAM_LOCAL_OCR_DPI_TEXT=200`, `SLAM_LOCAL_OCR_DPI_CROP=180` (vs. `300/250` on Robert's local Windows machine) keep memory under ~3 GB on the standard 4-core / 8 GB SKU. See **[Development with GitHub Codespaces](#development-with-github-codespaces-v244)** below for one-click setup.
+- **Development Environment Migration (v2.44)** — **GitHub Codespaces is now the recommended dev environment** for the heavy Local Enhanced OCR pipeline. New `.devcontainer/` config provisions a fully-loaded Linux container (Python 3.10, poppler-utils, pdfplumber + pdf2image + easyocr + opencv-python-headless + pillow + numpy, EasyOCR English model pre-warmed) on every Codespace creation. Streamlit is auto-forwarded on port 8501. Smart resource-aware defaults: `SLAM_LOCAL_OCR_DPI_TEXT=200`, `SLAM_LOCAL_OCR_DPI_CROP=220` (vs. `300/250` on Robert's local Windows machine) keep memory under ~3 GB on the standard 4-core / 8 GB SKU. See **[Development with GitHub Codespaces](#development-with-github-codespaces-v244)** below for one-click setup.
 - **Phase 1** — Revenue Reporting Tracker: **Complete**
 - **Phase 2** — Secure Azure Deployment: **Complete** (F1 tier; modern polling-safe deploy path v2.38.3)
 - **Phase 2.5** — Stabilization (P0–P2): **Complete in app**
 - **Azure OCR Function (v2.43)** — `slam-ocr-function` (Linux Y1 Consumption) runs the full real-OCR pipeline (pdfplumber fast path → pdf2image+EasyOCR fallback → OpenCV check cropper) **plus intelligent check ↔ transaction linking** that extracts the payee from each cropped check image's "Pay to the order of" line and writes it back to the matched transaction's Payee. **Deploy parked** at v2.43.1 pending Y1 infra decision; live Function still serves v2.41-skeleton. Streamlit Bank Statements page consumes the new pipeline with zero code changes the moment it ships.
-- **Local Enhanced OCR (v2.43.2 — Robert only)** — In-process port of the v2.43 Azure pipeline lives at `App/local_enhanced_ocr.py` so Robert can flip the **🖥️ Local Enhanced OCR (Robert only)** radio on the Bank Statements page and run the full check-linking workflow on his dev machine while the Azure deploy is parked. Heavy libs (`pdfplumber + pdf2image + easyocr + opencv-python-headless + pillow + numpy`, plus Windows `poppler` on PATH) are imported lazily — missing libs degrade to **Lightweight Parser** with a clear warning; no impact on the production F1 App Service.
-- **Bank Statements** — Upload PDF → **Lightweight Parser** OR **🖥️ Local Enhanced OCR (Robert only — v2.43.2)** OR **Azure OCR (v2.43)** OR paste Grok CSV → automated reconciliation check → **persistent payee rules engine** (v2.39) → review → Mark as Received (Core Workstream #2)
+- **Local Enhanced OCR (v2.44.3 — Robert only)** — Hardened in-process port of the v2.43 Azure pipeline (strict OCR-mode parser on EasyOCR fallback, authoritative statement-summary totals, `_is_clean_payee` matcher guard preventing OCR-garbage payees at High confidence) lives at `App/local_enhanced_ocr.py` so Robert can flip the **🖥️ Local Enhanced OCR (Robert only)** radio on the Bank Statements page and run the full check-linking workflow on his dev machine while the Azure deploy is parked. Heavy libs (`pdfplumber + pdf2image + easyocr + opencv-python-headless + pillow + numpy`, plus Windows `poppler` on PATH) are imported lazily — missing libs degrade to **Lightweight Parser** with a clear warning; no impact on the production F1 App Service.
+- **Bank Statements** — Upload PDF → **Lightweight Parser** OR **🖥️ Local Enhanced OCR (Robert only — v2.44.3)** OR **Azure OCR (v2.43)** OR paste Grok CSV → automated reconciliation check → **persistent payee rules engine** (v2.39) → review → Mark as Received (Core Workstream #2)
 - **Payee rules engine (v2.39)** — `Data/payee_rules.csv` auto-applies on every statement, with **💡 Learn this mapping** to teach new rules (Quick Parallel Win delivered from Blueprint §8.1)
 - **UAT (v2.32)** — Laura/Stef user acceptance testing; unsaved-change guards, new quick views, ops health script
 - **Daily driver (v2.31)** — Dashboard briefing, quick filters, help panel, logging, CSV/DB freshness
@@ -33,7 +33,7 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 ## Development with GitHub Codespaces (v2.44)
 
-**Recommended dev environment** for everything OCR-heavy (the Local Enhanced OCR pipeline pulls in PyTorch + EasyOCR + OpenCV + Poppler — together ~1.5 GB of system + Python deps that are painful to install on a fresh Windows or macOS machine). Codespaces gives every contributor a clean Linux container with the entire stack pre-installed and a publicly-forwarded Streamlit URL, in about **5 minutes** from "I want to develop on this repo" to "I can run the full v2.43.2 pipeline against `Data/Auto_Body_Center_Jan_26_Statement.pdf`".
+**Recommended dev environment** for everything OCR-heavy (the Local Enhanced OCR pipeline pulls in PyTorch + EasyOCR + OpenCV + Poppler — together ~1.5 GB of system + Python deps that are painful to install on a fresh Windows or macOS machine). Codespaces gives every contributor a clean Linux container with the entire stack pre-installed and a publicly-forwarded Streamlit URL, in about **5 minutes** from "I want to develop on this repo" to "I can run the full v2.44.3 pipeline against `Data/Auto_Body_Center_Jan_26_Statement.pdf`".
 
 ### One-click setup
 
@@ -67,9 +67,9 @@ To fit the heavy raster + OCR stack inside the **4-core / 8 GB** standard Codesp
 | Tunable | Codespaces default | Primary mirroring env default (Codespace `slam-v2.44-codespaces-migration`) | Override |
 |---------|-------------------:|---------------------------------------------------------------:|----------|
 | `SLAM_LOCAL_OCR_DPI_TEXT` | `200` | `300` (high-fidelity on the mirroring Codespace) | raises raster fidelity for the EasyOCR fallback |
-| `SLAM_LOCAL_OCR_DPI_CROP` | `180` | `250` (high-fidelity on the mirroring Codespace) | raises check-cropper fidelity (improves "Pay to the order of" extraction) |
+| `SLAM_LOCAL_OCR_DPI_CROP` | `220` | `250` (high-fidelity on the mirroring Codespace) | raises check-cropper fidelity (improves "Pay to the order of" extraction) |
 | `SLAM_LOCAL_OCR_MAX_PAGES_RASTER` | `20` | `30` | cap on raster fallback pages per PDF |
-| `SLAM_LOCAL_OCR_MAX_CHECKS` | `30` | `40` | cap on cropped checks per PDF |
+| `SLAM_LOCAL_OCR_MAX_CHECKS` | `50` | `50` | cap on cropped checks per PDF |
 | `SLAM_LOCAL_OCR_FAST_PATH_MIN_ROWS` | `3` | `3` | threshold below which the raster fallback runs |
 
 **Note**: The Codespace `slam-v2.44-codespaces-migration` is the current primary environment that mirrors the laptop for heavy OCR work. Use its higher defaults (300/250) when running inside it for maximum fidelity on test cases. The lower "Codespaces default" values are for smaller/standard Codespaces SKUs.
@@ -95,7 +95,7 @@ slam-info       # confirms all 6 caps are true and shows the active DPIs
 slam-run        # opens Streamlit on the auto-forwarded port 8501
 ```
 
-In the app: **Bank Statements** page → upload `Data/Auto_Body_Center_Jan_26_Statement.pdf` (or any local PDF) → select **🖥️ Local Enhanced OCR (Robert only — v2.43.2)** → **Process Statement**. The Processing log expander now logs a Codespaces-aware startup banner showing exactly which DPIs are in effect, so you can correlate "0 cropped checks" against a too-low DPI setting if you ever need to debug.
+In the app: **Bank Statements** page → upload `Data/Auto_Body_Center_Jan_26_Statement.pdf` (or any local PDF) → select **🖥️ Local Enhanced OCR (Robert only — v2.44.3)** → **Process Statement**. The Processing log expander now logs a Codespaces-aware startup banner showing exactly which DPIs are in effect, so you can correlate "0 cropped checks" against a too-low DPI setting if you ever need to debug.
 
 ### Rebuilding the container
 
@@ -272,11 +272,11 @@ Verify Azure App Settings: `SLAM_APP_PASSWORD`, `SLAM_APP_USER=Laura` (or Stef).
 
 Set `SLAM_APP_USER=Laura` (or Stef) in Azure App Settings so saves and sidebar show the correct name.
 
-### Bank Statements workflow (v2.39 quick reference, updated v2.43.2)
+### Bank Statements workflow (v2.39 quick reference, updated v2.44.3)
 
 1. **Choose client** + upload PDF(s) → pick a **Processing mode**:
    - **Lightweight Parser** (default — fast in-process pdfplumber path; works on every deploy)
-   - **🖥️ Local Enhanced OCR (Robert only — v2.43.2)** — runs the full v2.43 pipeline (pdfplumber → easyocr fallback → opencv check cropping → intelligent check ↔ transaction matcher) **in-process**. Requires heavy libs installed locally; see the [Local Enhanced OCR Mode](#local-enhanced-ocr-mode-robert-only--v2432) section below.
+   - **🖥️ Local Enhanced OCR (Robert only — v2.44.3)** — runs the full v2.44.3 pipeline (pdfplumber → easyocr fallback → opencv check cropping → intelligent check ↔ transaction matcher with `_is_clean_payee` guard) **in-process**. Requires heavy libs installed locally; see the [Local Enhanced OCR Mode](#local-enhanced-ocr-mode-robert-only--v2432) section below.
    - **Azure OCR (Recommended for scanned PDFs)** — offloads to the dedicated `slam-ocr-function` Function App; only when the App Settings are configured (currently parked on v2.41-skeleton — see Blueprint v2.43.1).
    - …or paste Grok Vision CSV under **📋 Option 2** (image-only / scanned statements) — no processing-mode toggle needed
 2. **Process Statement** → review the **automated reconciliation banner** — green ✅ when detail totals match the bank's TOTALS line, red ⚠️ when they don't (the whole statement flags for review)
@@ -286,7 +286,8 @@ Set `SLAM_APP_USER=Laura` (or Stef) in Azure App Settings so saves and sidebar s
 6. **Download transactions CSV** for Power Query / `Process-Statement.ps1` (column order unchanged)
 7. **Link to revenue request** → **Mark as Received**
 
-### Local Enhanced OCR Mode (Robert only — v2.43.2)
+<a id="local-enhanced-ocr-mode-robert-only--v2432"></a>
+### Local Enhanced OCR Mode (Robert only — v2.44.3)
 
 **Interim solution** so Robert can exercise the full v2.43 intelligent check-linking pipeline locally while the Azure Function deploy stays parked behind the Y1 infra decision (see Blueprint v2.43.1 Change Log for the four candidate paths forward).
 
@@ -294,7 +295,7 @@ What it does:
 
 - Selects the **🖥️ Local Enhanced OCR (Robert only)** radio on the Bank Statements page
 - Runs `App/local_enhanced_ocr.py` in-process — a byte-faithful port of `AzureFunctions/ocr_processor/function_app.py` v2.43 minus the Azure-Functions HTTP layer
-- Pipeline stages match the Function exactly: pdfplumber text-layer fast path → pdf2image+EasyOCR raster fallback at 300 DPI → OpenCV check cropper at 250 DPI → v2.43 check ↔ transaction matcher (exact Check# → amount equality → fuzzy Description match) → Payee enhancement from the "Pay to the order of" line on each cropped check image
+- Pipeline stages match the Function exactly: pdfplumber text-layer fast path → pdf2image+EasyOCR raster fallback at 300 DPI → OpenCV check cropper at 250 DPI → v2.43 check ↔ transaction matcher (exact Check# → amount equality → fuzzy Description match) → Payee enhancement from the "Pay to the order of" line on each cropped check image, gated in v2.44.3 by an `_is_clean_payee` quality check so OCR-garbage tokens never pollute Payee at High confidence (see `Scripts/test_local_ocr_regression.py::test_is_clean_payee_guards`)
 - Same canonical 12-column DataFrame, same `grok_totals` payload, same `cropped_checks` shape with `linked_check_id` / `extracted_payee` so the existing reconciliation banner, payee rules engine, and Power Query workflow all consume the output unchanged
 
 One-time local setup (Robert's dev machine):
@@ -314,9 +315,9 @@ streamlit run App/app.py
 
 The sidebar **🔧 System status** expander shows live capability detection:
 
-- **🖥️ Local Enhanced OCR (v2.43.2): available ✅** — all six heavy libs importable; the full check-linking pipeline is ready
-- **🖥️ Local Enhanced OCR (v2.43.2): partial ⚠️ (missing X — fast path only, no check linking)** — only pdfplumber is installed; fast-path transactions still extract but the cropper / matcher stages are skipped
-- **🖥️ Local Enhanced OCR (v2.43.2): unavailable** — pdfplumber is missing; the radio still works but auto-falls back to the Lightweight Parser with a `[WARN]` log in the Processing log expander
+- **🖥️ Local Enhanced OCR (v2.44.3): available ✅** — all six heavy libs importable; the full check-linking pipeline is ready
+- **🖥️ Local Enhanced OCR (v2.44.3): partial ⚠️ (missing X — fast path only, no check linking)** — only pdfplumber is installed; fast-path transactions still extract but the cropper / matcher stages are skipped
+- **🖥️ Local Enhanced OCR (v2.44.3): unavailable** — pdfplumber is missing; the radio still works but auto-falls back to the Lightweight Parser with a `[WARN]` log in the Processing log expander
 
 Production note: the F1 App Service (`slam-services-revenue-tracker`) only has `pdfplumber` installed — the Local Enhanced radio there will correctly report "missing libs" and fall back to the Lightweight Parser, so Laura's daily-driver workflow is **never disrupted** even if she accidentally selects it.
 

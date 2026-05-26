@@ -1942,7 +1942,7 @@ def run_azure_ocr_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Local Enhanced OCR pipeline (v2.43.2) — local-first port of v2.43
+# Local Enhanced OCR pipeline (v2.44.3) — local-first port of v2.43
 # ---------------------------------------------------------------------------
 # In-process version of the Azure Function's v2.43 pipeline for Robert's local
 # development environment while the heavy Function deploy (easyocr + torch on
@@ -2008,7 +2008,7 @@ def run_local_enhanced_ocr_pipeline(
     client_name: str,
     logger,
 ) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
-    """Run the v2.43 OCR pipeline locally (no Azure Function call).
+    """Run the v2.44.3 OCR pipeline locally (no Azure Function call).
 
     Behavior mirrors :func:`run_azure_ocr_pipeline` so the Bank Statements
     page can swap implementations on a single radio toggle:

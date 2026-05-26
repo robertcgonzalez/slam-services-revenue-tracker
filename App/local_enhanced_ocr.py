@@ -1,4 +1,4 @@
-"""SLAM Services — Local Enhanced OCR pipeline (v2.43.2).
+"""SLAM Services — Local Enhanced OCR pipeline (v2.44.3).
 
 This module is an in-process port of the v2.43 Azure OCR Function pipeline
 (`AzureFunctions/ocr_processor/function_app.py`) so the Streamlit Bank
@@ -9,7 +9,7 @@ Consumption infra decision (see Blueprint v2.43.1 Change Log).
 The HTTP plumbing and `azure.functions` dependency are stripped. The actual
 OCR stages (pdfplumber → easyocr fallback → opencv check cropping → check ↔
 transaction matcher) and the canonical 12-column transaction shape are kept
-byte-identical to the Function so v2.43.2 output drops straight into the same
+byte-identical to the Function so v2.44.3 output drops straight into the same
 review UI, payee rules engine, reconciliation banner, and Power Query /
 Process-Statement.ps1 downstream workflow.
 

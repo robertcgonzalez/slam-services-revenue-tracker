@@ -2082,10 +2082,10 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
         key="bank_stmt_pdf_upload",
     )
 
-    # --- Processing mode selector (v2.41 → v2.43.2) ---
+    # --- Processing mode selector (v2.41 → v2.44.3) ---
     # Three engines are now exposed so Laura / Robert can pick the right tool:
     #   1. Lightweight Parser — fast in-process pdfplumber path; the safe default.
-    #   2. Local Enhanced OCR (Robert only) — full v2.43 pipeline running in-process
+    #   2. Local Enhanced OCR (Robert only) — full v2.44.3 pipeline running in-process
     #      (pdfplumber → easyocr fallback → opencv check cropping → check ↔ transaction
     #      matcher). Gives Robert the intelligent check-linking experience locally
     #      while the Azure Function deploy stays parked (Blueprint v2.43.1 § Change Log).
@@ -2118,7 +2118,7 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
         key="bank_stmt_mode_radio",
         help=(
             "Lightweight Parser runs the existing pdfplumber-only path (fast for text-layer PDFs). "
-            "Local Enhanced OCR runs the full v2.43 pipeline locally (pdfplumber → easyocr "
+            "Local Enhanced OCR runs the full v2.44.3 pipeline locally (pdfplumber → easyocr "
             "fallback → check cropping → intelligent check ↔ transaction linking) — best for "
             "Robert's dev environment while the Azure Function deploy is parked. "
             "Azure OCR offloads the same heavy pipeline to the dedicated `slam-ocr-function` "
@@ -2139,7 +2139,7 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
         if local_ocr_available and not local_ocr_missing:
             st.info(
                 f"🖥️ **Local Enhanced Mode (Robert only — full check linking)** active. "
-                f"Running the v2.43 pipeline in-process ({LOCAL_ENHANCED_OCR_VERSION}): "
+                f"Running the local enhanced pipeline in-process ({LOCAL_ENHANCED_OCR_VERSION}): "
                 "pdfplumber → easyocr fallback → opencv check cropping → intelligent "
                 "check ↔ transaction matcher."
             )
@@ -2156,7 +2156,7 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
                 "🖥️ Local Enhanced OCR is unavailable in this environment — required heavy "
                 f"libraries are missing (`{', '.join(local_ocr_missing) or 'pdfplumber'}`). "
                 "The page will fall back to the **Lightweight Parser** for this run. To enable "
-                "the full v2.43 pipeline locally, install: "
+                "the full v2.44.3 pipeline locally, install: "
                 "`pip install pdfplumber pdf2image easyocr pillow opencv-python-headless numpy`."
             )
 
@@ -2745,7 +2745,7 @@ def render_sidebar_extras(
             st.caption("🤖 Azure OCR Function: **not configured**")
             st.caption(f"  ↳ {ocr_state['hint']}")
 
-        # Local Enhanced OCR status (v2.43.2) — flips green once the heavy
+        # Local Enhanced OCR status (v2.44.3) — flips green once the heavy
         # libraries (pdfplumber + pdf2image + easyocr + opencv + pillow + numpy)
         # are importable, so Robert can see at a glance whether full check
         # linking is available in his current Python env.
