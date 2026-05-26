@@ -64,13 +64,15 @@ It contains all project assets, documentation, data, scripts, and the deployed S
 
 To fit the heavy raster + OCR stack inside the **4-core / 8 GB** standard Codespaces SKU, `App/local_enhanced_ocr.py` lowers its DPI / page / check-count defaults when it detects `CODESPACES=true`. Override any of these via `export` before launching Streamlit if you're on the 16 GB+ SKU and want full fidelity:
 
-| Tunable | Codespaces default | Local Windows default | Override |
-|---------|-------------------:|----------------------:|----------|
-| `SLAM_LOCAL_OCR_DPI_TEXT` | `200` | `300` | raises raster fidelity for the EasyOCR fallback |
-| `SLAM_LOCAL_OCR_DPI_CROP` | `180` | `250` | raises check-cropper fidelity (improves "Pay to the order of" extraction) |
+| Tunable | Codespaces default | Primary mirroring env default (Codespace `slam-v2.44-codespaces-migration`) | Override |
+|---------|-------------------:|---------------------------------------------------------------:|----------|
+| `SLAM_LOCAL_OCR_DPI_TEXT` | `200` | `300` (high-fidelity on the mirroring Codespace) | raises raster fidelity for the EasyOCR fallback |
+| `SLAM_LOCAL_OCR_DPI_CROP` | `180` | `250` (high-fidelity on the mirroring Codespace) | raises check-cropper fidelity (improves "Pay to the order of" extraction) |
 | `SLAM_LOCAL_OCR_MAX_PAGES_RASTER` | `20` | `30` | cap on raster fallback pages per PDF |
 | `SLAM_LOCAL_OCR_MAX_CHECKS` | `30` | `40` | cap on cropped checks per PDF |
 | `SLAM_LOCAL_OCR_FAST_PATH_MIN_ROWS` | `3` | `3` | threshold below which the raster fallback runs |
+
+**Note**: The Codespace `slam-v2.44-codespaces-migration` is the current primary environment that mirrors the laptop for heavy OCR work. Use its higher defaults (300/250) when running inside it for maximum fidelity on test cases. The lower "Codespaces default" values are for smaller/standard Codespaces SKUs.
 
 The sidebar **🔧 System status** expander shows the active runtime, DPI, and page-cap settings live so you can confirm what's in effect for any given Streamlit session.
 
@@ -462,7 +464,9 @@ After CSV edits (sync to PostgreSQL):
 
 ## Local verification
 
-> **Tip (v2.44):** the steps below are the **Windows-native** workflow for Robert's existing dev machine. If you're spinning up a fresh dev environment — especially for the heavy Local Enhanced OCR pipeline — **GitHub Codespaces** ([§ Development with GitHub Codespaces](#development-with-github-codespaces-v244) above) is the faster and more reliable path: it skips the Python 3.10 install, the venv rebuild, the poppler binaries, and the PyTorch wheel resolution that frequently fail on fresh Windows machines.
+> **Tip (v2.44+):** The primary environment that currently mirrors the laptop for heavy Local Enhanced OCR development, script testing, and pipeline verification is the GitHub Codespace named **`slam-v2.44-codespaces-migration`**. All local script/pipeline testing for OCR work (regression tests, `e2e_local_ocr.py`, `slam-info`, full runs against `Data/Auto_Body_Center_Jan_26_Statement.pdf`, etc.) should be executed inside that Codespace.
+>
+> The steps below document the legacy **Windows-native** workflow on a physical machine. GitHub Codespaces remains the faster and more reliable path for the heavy OCR stack.
 
 ### First-time or broken venv (recommended)
 
@@ -531,7 +535,7 @@ When starting a new session in Cursor (or this Grok environment), begin with:
 
 > "Reference the full SLAM Services Digital Transformation Blueprint.md (latest version) and this README.md. [Your request]"
 
-The two active agent contracts (`.cursor/rules/slam-services.mdc` for Cursor and `SLAM-Grok-Context.md` for Grok) are intentionally thin. They contain only the non-negotiable standing orders (anti-bloat/role-respect + git operations via thorough local confirmation) plus pointers to this document.
+The two active agent contracts (`.cursor/rules/slam-services.mdc` for Cursor and `.grok/AGENT.md` for Grok) are intentionally thin. They contain only the non-negotiable standing orders (anti-bloat/role-respect + git operations via thorough local confirmation) plus pointers to this document.
 
 ### Documentation Roles Matrix
 
@@ -542,7 +546,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 | `SLAM Services - Digital Transformation Blueprint.md` | Humans + agents (deep reference) | **Living Single Source of Truth + complete project history**. The authoritative record of vision, architecture, decisions, roadmap, SDLC, and all major milestones. | Full Change Log (narrative history), executive summary, phased roadmap, technical architecture, stakeholder map, risk/decision logs, Section 14 feedback system, detailed "why" behind every significant change. | Day-to-day commands, quick-start recipes, injected agent constraints (keep thin), the "map" of which doc does what. |
 | `README.md` | Humans (onboarding + daily reference) + agents (cross-reference) | **Practical human onboarding, current status snapshot, command reference, and the single authoritative "Documentation Roles & Agent Workflow" guide**. The one place anyone looks first to understand how to work with the project and where information lives. | Current status banner, Codespaces / local dev / Azure deploy / health / UAT quick-start recipes, this Documentation Roles Matrix, folder structure, project goals. | Long historical narrative (belongs in Blueprint), hard agent prompt constraints (belong in the two injected contracts). |
 | `.cursor/rules/slam-services.mdc` | Cursor (Composer / Agent / inline edit) — **always injected** | **Lean, self-contained primary agent contract**. Contains only the non-negotiable rules that must be in Cursor's context window on every invocation. | Agent role declaration (Cursor lead), reference to Blueprint + README, the two core standing orders (anti-bloat/role-respect + git via thorough confirmation), security/Laura-confidence, verification habits, tech stack pointers, one-sentence pointer to this matrix. | Long explanations, history, commands, the full matrix (pointer only). Must stay minimal. |
-| `SLAM-Grok-Context.md` | Grok 4.3 (this TUI and other Grok-assisted sessions) — **secondary agent** | **Official Grok secondary agent context**. Carries the same hard constraints as the Cursor contract so Grok sessions stay consistent with project rules. | Same two core standing orders (anti-bloat + git confirmation), updated "Cursor primary + Grok secondary" reality, pointer to this matrix. Short and focused. | Anything that duplicates the Cursor contract or the human docs. |
+| `.grok/AGENT.md` | Grok 4.3 (this TUI and other Grok-assisted sessions) — **secondary agent** | **Official Grok secondary agent context** (canonical location). Carries the same hard constraints as the Cursor contract so Grok sessions stay consistent with project rules. | Same two core standing orders (anti-bloat + git confirmation), updated "Cursor primary + Grok secondary" reality, pointer to this matrix. Short and focused. | Anything that duplicates the Cursor contract or the human docs. |
 
 ### Key Files
 

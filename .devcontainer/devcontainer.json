@@ -49,15 +49,23 @@
 
   // Environment variables baked into the container image at build
   // time. Codespaces-friendly defaults for the Local Enhanced OCR
-  // pipeline — keeps memory under ~3 GB on a 4-core / 16 GB machine
+  // pipeline — keeps memory under ~3.5 GB on a 4-core / 16 GB machine
   // even on multi-page scanned statements. Robert can override these
   // any time with `export SLAM_LOCAL_OCR_DPI_TEXT=300` if he's on
   // the larger SKU and wants higher fidelity.
+  //
+  // v2.44.3 — DPI_CROP raised 180 → 220 and MAX_CHECKS raised 30 → 50
+  // after verifying live in slam-v2.44-codespaces-migration that the
+  // OpenCV contour finder returns ZERO candidates at 180 DPI on the
+  // Auto Body Center test PDF, vs. 50+ at 220 DPI. The cropper was
+  // silently disabled at the previous settings, masking the matcher
+  // payee-quality bug that v2.44.3 also fixes. Memory delta is small
+  // (~1.5x per rasterized check page) — well within the 16 GB SKU.
   "containerEnv": {
     "SLAM_LOCAL_OCR_DPI_TEXT": "200",
-    "SLAM_LOCAL_OCR_DPI_CROP": "180",
+    "SLAM_LOCAL_OCR_DPI_CROP": "220",
     "SLAM_LOCAL_OCR_MAX_PAGES_RASTER": "20",
-    "SLAM_LOCAL_OCR_MAX_CHECKS": "30",
+    "SLAM_LOCAL_OCR_MAX_CHECKS": "50",
     "SLAM_APP_USER": "Robert (Codespaces)",
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1",

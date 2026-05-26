@@ -51,9 +51,10 @@ Keep updates factual, versioned, and focused — no speculative rewrites. Always
 
 ## Verification habits
 
-- App changes → run Streamlit locally.
+- App changes → run Streamlit locally (primary environment: the GitHub Codespace `slam-v2.44-codespaces-migration` for heavy OCR work).
 - Python changes → `ruff check` / `ruff format` on `App` and `Scripts`.
 - Deploy-related changes → confirm zip layout (`requirements.txt`, `App/`, `Data/`, `startup.sh` at root).
+- Heavy Local Enhanced OCR pipeline / script testing → execute inside the Codespace `slam-v2.44-codespaces-migration` (the current primary mirroring environment for laptop-local OCR work).
 
 ## Style
 

@@ -44,6 +44,10 @@ Scripts/_streamlit_bank_uploads/
 #   python Scripts/dump_pipeline_ocr_lines.py
 Scripts/_easyocr_cache_*.json
 Scripts/_pipeline_lines.json
+# v2.44.3: ad-hoc matcher diagnostic — runs the cropper + matcher and dumps
+# every touched row to stdout. Useful for tuning `_is_clean_payee` and the
+# Codespaces cropper DPI; not part of the regression suite. Local only.
+Scripts/_diag_matcher.py
 __pycache__/
 *.py[cod]
 *$py.class

@@ -1953,7 +1953,7 @@ def run_azure_ocr_pipeline(
 # imported lazily inside the pipeline stages so the module remains importable
 # in trimmed-down deploys.
 
-LOCAL_ENHANCED_OCR_VERSION = "v2.43.2"
+LOCAL_ENHANCED_OCR_VERSION = "v2.44.3"
 
 # Subset of capabilities the pipeline absolutely needs before it's worth even
 # attempting (no point spinning up easyocr if pdfplumber + pillow + numpy are

@@ -172,7 +172,7 @@ except ImportError:
             },
         )
 
-    LOCAL_ENHANCED_OCR_VERSION = "v2.43.2"
+    LOCAL_ENHANCED_OCR_VERSION = "v2.44.3"
 
     def local_enhanced_ocr_available():
         return False, {}, []

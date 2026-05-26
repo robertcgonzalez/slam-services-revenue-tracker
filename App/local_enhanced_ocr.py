@@ -39,7 +39,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-LOCAL_ENHANCED_OCR_VERSION = "v2.43.2"
+LOCAL_ENHANCED_OCR_VERSION = "v2.44.3"
 
 
 def _is_codespaces() -> bool:
@@ -55,17 +55,27 @@ def _is_codespaces() -> bool:
     return os.environ.get("CODESPACES", "").strip().lower() == "true"
 
 
-# Default DPIs differ between Robert's local Windows machine (high RAM,
-# plug for fidelity at 300/250) and a Codespaces container (resource-aware
-# 200/180). Either default is overridable per-run via the SLAM_LOCAL_OCR_*
-# env vars below — devcontainer.json sets the Codespaces values explicitly,
-# but if the env vars are unset and we still detect Codespaces, fall back
-# to the safer defaults so scripted runs are well-behaved.
+# Default DPIs differ between the primary mirroring environment
+# (GitHub Codespace `slam-v2.44-codespaces-migration`, which replicates
+# the laptop setup) and a Codespaces container (resource-aware 200/180).
+# Either default is overridable per-run via the SLAM_LOCAL_OCR_* env vars
+# below — devcontainer.json sets the Codespaces values explicitly, but if
+# the env vars are unset and we still detect Codespaces, fall back to the
+# safer defaults so scripted runs are well-behaved.
 _RUNTIME_IS_CODESPACES = _is_codespaces()
 _DEFAULT_DPI_TEXT = "200" if _RUNTIME_IS_CODESPACES else "300"
-_DEFAULT_DPI_CROP = "180" if _RUNTIME_IS_CODESPACES else "250"
+# v2.44.3: bumped DPI_CROP from 180 → 220 in Codespaces. At 180 the OpenCV
+# contour finder produced ZERO check-rectangle candidates on the Auto Body
+# Center Jan-26 scanned PDF (verified live in slam-v2.44-codespaces-migration);
+# at 220 the same pass returns 50+ candidates, matching the laptop's
+# behaviour. The ~1.5x memory cost per rasterized page is well worth the
+# matcher actually being exercised.
+_DEFAULT_DPI_CROP = "220" if _RUNTIME_IS_CODESPACES else "250"
 _DEFAULT_MAX_PAGES_RASTER = "20" if _RUNTIME_IS_CODESPACES else "30"
-_DEFAULT_MAX_CHECKS = "30" if _RUNTIME_IS_CODESPACES else "40"
+# v2.44.3: cap raised 30 → 50 in Codespaces so the cropper can reach all 49
+# check images on a typical Traditions Bank monthly statement without
+# truncating mid-page.
+_DEFAULT_MAX_CHECKS = "50" if _RUNTIME_IS_CODESPACES else "40"
 
 # Canonical 12-column order — must match GROK_CSV_COLUMNS in bank_statements.py
 # so the response drops straight into the existing review UI.
@@ -268,6 +278,10 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
     fast_path_rows = 0
     fallback_rows = 0
     default_year = datetime.utcnow().year
+    # Authoritative source totals from the Statement Summary block. When
+    # parsable, these override the row-sum totals in `_compute_grok_totals`
+    # so the reconciliation banner anchors against the bank's own number.
+    summary_override: dict[str, Any] = {}
 
     # 1) pdfplumber fast path -------------------------------------------------
     try:
@@ -276,6 +290,7 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
         default_year = statement_year or default_year
 
         if text_blob.strip():
+            summary_override = _extract_statement_summary(text_blob) or summary_override
             lines = [ln.strip() for ln in text_blob.splitlines() if ln.strip()]
             line_rows = _parse_lines_to_transactions(lines, default_year)
             table_rows = _parse_table_rows(tables, default_year) if tables else []
@@ -317,16 +332,40 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
             ocr_lines, ocr_logs = _ocr_extract_lines(pdf_bytes)
             pipeline_logs.extend(ocr_logs)
             if ocr_lines:
-                fallback_txns = _parse_lines_to_transactions(
-                    ocr_lines, default_year, source="easyocr"
-                )
+                # v2.44 — Pull authoritative source totals from the
+                # Statement Summary block BEFORE the strict parser eats
+                # those lines as skip-noise. Per-line search is cheap and
+                # the parser ignores the lines anyway.
+                ocr_summary = _extract_statement_summary(ocr_lines)
+                if ocr_summary:
+                    # Pdfplumber totals (if any) win on a hybrid PDF, but
+                    # for a fully-scanned PDF the OCR summary is the only
+                    # source we have.
+                    for key, value in ocr_summary.items():
+                        summary_override.setdefault(key, value)
+                    pipeline_logs.append(
+                        _log(
+                            "info",
+                            "EasyOCR statement summary parsed: "
+                            f"deposits=${ocr_summary.get('deposits', '?')} "
+                            f"withdrawals=${ocr_summary.get('withdrawals', '?')} "
+                            f"(authoritative — overrides row-sum totals).",
+                        )
+                    )
+
+                # v2.44 — Use the strict OCR-mode parser instead of the
+                # general-purpose one. The general-purpose parser produces
+                # ~160 noisy rows from this layout (summary lines + check-
+                # image attachment garbage); the strict parser produces
+                # ~92 clean rows matching the Grok Vision baseline.
+                fallback_txns = _parse_ocr_lines_to_transactions(ocr_lines, default_year)
                 fallback_txns = _filter_balance_only_rows(_dedupe_transactions(fallback_txns))
                 fallback_rows = len(fallback_txns)
                 pipeline_logs.append(
                     _log(
                         "info",
-                        f"EasyOCR fallback produced {fallback_rows} transaction(s) "
-                        f"from {len(ocr_lines)} OCR line(s).",
+                        f"EasyOCR fallback (strict mode) produced {fallback_rows} "
+                        f"transaction(s) from {len(ocr_lines)} OCR line(s).",
                     )
                 )
                 transactions = _dedupe_transactions(transactions + fallback_txns)
@@ -371,7 +410,7 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — matcher is best-effort
         pipeline_logs.append(_log("warn", f"Check-to-transaction matcher failed: {exc}"))
 
-    grok_totals = _compute_grok_totals(canonical)
+    grok_totals = _compute_grok_totals(canonical, summary_override=summary_override)
     linked_count = sum(1 for row in canonical if row.get("linked_check_id"))
 
     if canonical and (fast_path_rows >= OCR_FAST_PATH_MIN_ROWS or fallback_rows >= 1):
@@ -407,8 +446,22 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
     }
 
 
-def _compute_grok_totals(transactions: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute reconciliation totals (matches Grok TOTALS line shape)."""
+def _compute_grok_totals(
+    transactions: list[dict[str, Any]],
+    *,
+    summary_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute reconciliation totals (matches Grok TOTALS line shape).
+
+    When ``summary_override`` is provided (typically the result of
+    :func:`_extract_statement_summary`), its ``deposits`` / ``withdrawals``
+    values take precedence — the statement's own self-reported totals are
+    always more trustworthy than rows fished out of OCR text because they
+    sit cleanly in the Statement Summary block, not the noisy transaction
+    detail. The ``checks`` and ``transactions`` counts always come from the
+    detail rows because those are what downstream consumers (Power Query,
+    Process-Statement.ps1) actually iterate over.
+    """
 
     deposits = 0.0
     withdrawals = 0.0
@@ -426,12 +479,102 @@ def _compute_grok_totals(transactions: list[dict[str, Any]]) -> dict[str, Any]:
         if str(row.get("Check#", "")).strip():
             checks += 1
 
-    return {
+    totals: dict[str, Any] = {
         "deposits": round(deposits, 2),
         "withdrawals": round(withdrawals, 2),
         "checks": checks,
         "transactions": len(transactions),
     }
+
+    if summary_override:
+        if isinstance(summary_override.get("deposits"), (int, float)):
+            totals["deposits"] = round(float(summary_override["deposits"]), 2)
+        if isinstance(summary_override.get("withdrawals"), (int, float)):
+            totals["withdrawals"] = round(float(summary_override["withdrawals"]), 2)
+    return totals
+
+
+# ---------------------------------------------------------------------------
+# v2.44 — Statement Summary extractor (authoritative source totals)
+# ---------------------------------------------------------------------------
+# The Statement Summary block at the top of every Traditions Bank statement
+# (and most US bank statements) declares the period's deposits/withdrawals
+# totals BEFORE the detail rows. Parsing them directly is far more reliable
+# than summing OCR-derived transactions — the summary numbers are typeset
+# cleanly while the detail rows are scanned at varying quality. We capture
+# both values and feed them into ``_compute_grok_totals`` as the source of
+# truth so the reconciliation banner anchors against the bank's own number.
+
+_SUMMARY_DEPOSITS_RE = re.compile(
+    r"(?im)^\s*(?:deposits?\s+and\s+other\s+(?:credits?|debits?)|"
+    r"total\s+deposits?(?:\s+and\s+credits?)?|"
+    r"total\s+credits?)\s*[_:\-]*\s*"
+    r"\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})\s*\+?\s*$"
+)
+
+_SUMMARY_WITHDRAWALS_RE = re.compile(
+    r"(?im)^\s*(?:\d+\s+)?(?:withdrawals?\s+and\s+other\s+(?:debits?|credits?)|"
+    r"total\s+withdrawals?(?:\s+and\s+debits?)?|"
+    r"total\s+debits?)\s*[_:\-]*\s*"
+    r"\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})\s*[\-+]?\s*$"
+)
+
+# "83 Withdrawals and Other Debits 41,403.63 -" → captures leading count
+_SUMMARY_WITHDRAWAL_COUNT_RE = re.compile(
+    r"(?im)^\s*(\d+)\s+withdrawals?\s+and\s+other\s+(?:debits?|credits?)\s+"
+    r"\$?\s*\d{1,3}(?:,\d{3})*\.\d{2}"
+)
+_SUMMARY_DEPOSIT_COUNT_RE = re.compile(
+    r"(?im)^\s*(\d+)\s+deposits?\s+and\s+other\s+(?:credits?|debits?)\s+"
+    r"\$?\s*\d{1,3}(?:,\d{3})*\.\d{2}"
+)
+
+
+def _extract_statement_summary(lines_or_text: list[str] | str) -> dict[str, Any]:
+    """Parse the Statement Summary block for authoritative deposit/withdrawal totals.
+
+    Returns a dict with any of ``deposits``, ``withdrawals``,
+    ``deposits_count``, ``withdrawals_count`` keys that could be parsed
+    (missing keys = pattern not found). The parser is intentionally
+    permissive about surrounding whitespace and trailing ``+`` / ``-``
+    signs because the Traditions Bank PDF prints them, and EasyOCR usually
+    reads them as separate tokens but the line text still has them
+    appended (e.g. "Deposits and Other Credits_ 41,786.80+").
+    """
+
+    if isinstance(lines_or_text, list):
+        text = "\n".join(lines_or_text)
+    else:
+        text = str(lines_or_text or "")
+    if not text.strip():
+        return {}
+
+    summary: dict[str, Any] = {}
+    m = _SUMMARY_DEPOSITS_RE.search(text)
+    if m:
+        try:
+            summary["deposits"] = float(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    m = _SUMMARY_WITHDRAWALS_RE.search(text)
+    if m:
+        try:
+            summary["withdrawals"] = float(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    m = _SUMMARY_DEPOSIT_COUNT_RE.search(text)
+    if m:
+        try:
+            summary["deposits_count"] = int(m.group(1))
+        except ValueError:
+            pass
+    m = _SUMMARY_WITHDRAWAL_COUNT_RE.search(text)
+    if m:
+        try:
+            summary["withdrawals_count"] = int(m.group(1))
+        except ValueError:
+            pass
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +903,83 @@ _CHECK_IMAGE_AMOUNT_RE = re.compile(r"\$\s*(\d{1,3}(?:,\d{3})*\.\d{2})")
 _FUZZY_MIN = 0.60
 _AMOUNT_MATCH_TOLERANCE = 0.01
 
+# v2.44.3: OCR-tolerant strip for the "PAY TO THE ORDER OF" header text that
+# EasyOCR keeps re-emitting inside the cropped check tile. Accepts misreads
+# like "ORDER OFE", "ORDER OF_", "OFE", "Pay to The OF:" etc. Used by
+# ``_is_clean_payee`` and (transitively) ``_match_checks_to_transactions``.
+_PAYEE_HEADER_STRIP_RE = re.compile(
+    r"^(?:pay\w{0,3}|to|the|order|of\w{0,2}|payee)"
+    r"(?:[\s\-*:$_]+(?:pay\w{0,3}|to|the|order|of\w{0,2}|payee))*"
+    r"[\s\-*:$_]*",
+    re.IGNORECASE,
+)
+
+
+def _is_clean_payee(text: str) -> bool:
+    """Return True if ``text`` looks like a usable business/person name.
+
+    The check-image EasyOCR pass routinely produces garbage tokens after
+    stripping the "PAY TO THE ORDER OF" header — e.g. ``"0 Os.90"``,
+    ``"CRDER OK Som QS0-0j"``, ``"ORDER OF Gstnaktop 1 Oo_ 738.D3"``,
+    ``"Order Of 77"``, ``"ORDER OFE Hluuk"``. Without a quality gate the
+    matcher swaps these into ``Payee`` and stamps ``Confidence=High``,
+    which is exactly the visible bug in
+    ``Data/2026-05-26T11-22_export.csv`` (10 rows polluted).
+
+    The function errs on the side of *rejecting* — a false-reject costs
+    Laura a single Payee field to fill in by hand (the row is still
+    linked via the matcher), while a false-accept pollutes the export.
+
+    Heuristics (any failing rule → reject):
+        1. empty / <4 chars / >80 chars after strip
+        2. after stripping "(pay)/(to)/(the)/(order)/(of[a-z]{0,2})" header
+           variants the remainder must still be ≥4 chars and start with a
+           letter
+        3. no single token may mix letters + digits (strongest OCR-garbage
+           signal — "Slon8if4", "QS0-0j", "Os.90", "738.D3", "4Eiies")
+        4. digit-to-letter ratio ≤ 0.40 and non-alnum density ≤ 20%
+        5. must contain at least one vowel (random consonants → reject)
+        6. single-word remainder must be ≥6 chars (catches "Hluuk",
+           "Wuulu", "Eiies"; accepts "Target", "Costco", "Google")
+    """
+
+    if not text:
+        return False
+    s = str(text).strip()
+    if len(s) < 4 or len(s) > 80:
+        return False
+
+    stripped = _PAYEE_HEADER_STRIP_RE.sub("", s).strip(" -*:_$")
+    if len(stripped) < 4:
+        return False
+
+    if not stripped[0].isalpha():
+        return False
+
+    for tok in stripped.split():
+        if any(c.isalpha() for c in tok) and any(c.isdigit() for c in tok):
+            return False
+
+    letters = sum(1 for c in stripped if c.isalpha())
+    digits = sum(1 for c in stripped if c.isdigit())
+    nonalnum_nonspace = sum(
+        1 for c in stripped if not c.isalnum() and not c.isspace() and c != "&"
+    )
+    if letters == 0:
+        return False
+    if digits / letters > 0.40:
+        return False
+    if nonalnum_nonspace / len(stripped) > 0.20:
+        return False
+
+    if not re.search(r"[aeiouAEIOU]", stripped):
+        return False
+
+    if " " not in stripped and len(stripped) < 6:
+        return False
+
+    return True
+
 
 def _norm_check_no(raw: str) -> str:
     """Normalize a check number for matching (strip non-digits + leading zeros)."""
@@ -1017,6 +1237,7 @@ def _build_review_reason(existing: str, new_bit: str) -> str:
         bit
         for bit in bits
         if not bit.startswith("OCR fallback path")
+        and not bit.startswith("OCR fallback —")
         and bit != "Missing payee"
         and bit != "Missing date"
     ]
@@ -1131,21 +1352,45 @@ def _match_checks_to_transactions(
 
         txn = transactions[match_idx]
         old_payee = str(txn.get("Payee", "")).strip()
-        new_payee = extracted_payee.strip() if extracted_payee else ""
+        raw_new_payee = extracted_payee.strip() if extracted_payee else ""
 
-        should_swap = bool(new_payee) and (
+        # v2.44.3: gate the payee swap on ``_is_clean_payee`` so OCR garbage
+        # tokens (`"Os.90"`, `"CRDER OK Som QS0-0j"`, `"ORDER OF _ 6 3 Zhe"`,
+        # …) can never pollute Payee or falsely upgrade Confidence to High.
+        # The match_idx assignment itself (check# / amount / fuzzy) IS still
+        # authoritative — the row was verified against a cropped check
+        # image — so we always record ``linked_check_id`` and a clarifying
+        # ReviewReason. We only swap Payee when the cleaned token survives
+        # quality checks.
+        new_payee_is_clean = _is_clean_payee(raw_new_payee)
+
+        should_swap = new_payee_is_clean and (
             not old_payee
             or old_payee.lower() == "uncategorized"
-            or _fuzzy_ratio(old_payee, new_payee) < 0.85
+            or _fuzzy_ratio(old_payee, raw_new_payee) < 0.85
         )
 
         if should_swap:
-            txn["Payee"] = new_payee
+            txn["Payee"] = raw_new_payee
             txn["Confidence"] = "High"
             txn["NeedsReview"] = "No"
             txn["ReviewReason"] = _build_review_reason(
                 str(txn.get("ReviewReason", "")),
                 f"Payee from check image ({match_reason})",
+            )
+        else:
+            # Match found but the extracted payee was empty OR failed the
+            # quality guard. Record the link and downgrade Medium-or-lower
+            # rows to ``Low`` so Laura sees they need a human-typed payee;
+            # never downgrade rows already at ``High`` (e.g. set elsewhere
+            # by the rules engine on the fast path).
+            cur_conf = str(txn.get("Confidence", "")).strip().lower()
+            if cur_conf != "high":
+                txn["Confidence"] = "Low"
+                txn["NeedsReview"] = "Yes"
+            txn["ReviewReason"] = _build_review_reason(
+                str(txn.get("ReviewReason", "")),
+                f"Linked via {match_reason} (no clean payee from image)",
             )
 
         txn["linked_check_id"] = check_id
@@ -1214,10 +1459,32 @@ _SKIP_LINE_RE = re.compile(
     r"routing\s+number|member\s+fdic|equal\s+housing|summary\s+of\s+accounts|"
     r"statement\s+balance\s+summary|customer\s+service|"
     r"beginning\s+balance|ending\s+balance|average\s+daily\s+balance|"
-    r"previous\s+balance\s+[\d$,]|total\s+for\s|subtotal|"
+    r"previous\s+balance\s+[\d$,]|previous\s+balance\s+on\s+\d|"
+    r"balance\s+as\s+of\s+\d|total\s+for\s|subtotal|"
     r"number\s+of\s+(deposits|withdrawals|credits|debits|checks)|"
     r"^\s*\*\s*indicates\s+a\s+break|interest\s+earned\s+this\s+period|"
-    r"telephone\s+banking|www\.|^\s*[(]?\d{3}[)]?[-.\s]?\d{3}[-.\s]?\d{4}\s*$)"
+    r"telephone\s+banking|www\.|^\s*[(]?\d{3}[)]?[-.\s]?\d{3}[-.\s]?\d{4}\s*$|"
+    # v2.44 — summary block + check-image attachment skip patterns. These
+    # never produce transactions on their own (the dollar values feed
+    # `_extract_statement_summary` directly via the grok_totals path).
+    r"^\s*statement\s+summary\s*$|^\s*statement\s+activity\b|"
+    r"^\s*\d+\s+(deposits?|withdrawals?|debits?|credits?|checks?)\s+and\s+other\b|"
+    r"^\s*(deposits?|withdrawals?|credits?|debits?)\s+and\s+other\s+(credits?|debits?)\s*[_:]*\s*\d|"
+    r"^\s*summary\s+of\s+fees\b|^\s*reporting\s+period\b|"
+    r"^\s*total\s+(overdraft|returned)\b|^\s*refunded\s+fees\s+for\b|"
+    r"^\s*denotes\s+missing\s+check\b|"
+    r"^\s*deposit\s+ticket\b|^\s*depobit\s+ticket\b|"
+    r"^\s*pay\s+to\s+the\s+order\b|^\s*order\s+of\b|^\s*memo\b|"
+    r"^\s*dollars\s*$|^\s*dollars\s+[a-z@]|"
+    r"^\s*terminal\s+(d|i|did|id)\s*[:#]?|^\s*serial\s*#|"
+    r"^\s*tradition[sa]?\s*bank\b|^\s*building\s+bridges\b|"
+    r"^\s*how\s+to\s+balance\b|^\s*in\s+case\s+of\s+errors\b|"
+    r"^\s*hints\s+for\s+finding\b|^\s*clip\s+and\s+return\b|"
+    r"^\s*for\s+(a\s+)?change\s+of\s+(name|address)\b|"
+    r"^\s*new\s+balance\b|^\s*sub\s*total\b|"
+    r"^\s*p\.?o\.?\s*box\s+\d|"
+    r"^\s*(date|number|amount|balance)(\s+(date|number|amount|balance))+\s*$|"
+    r"^\s*date\s+(description|number|check)\s*(amount)?\s*$)"
 )
 
 _BALANCE_TOTAL_RE = re.compile(
@@ -1231,9 +1498,26 @@ _SECTION_TERMINATORS = {
     "daily balances",
     "daily balance summary",
     "daily balance information",
+    "daily account balance",
+    "daily account balances",
     "statement balance summary",
     "balance summary",
     "account summary",
+    # v2.44 — anything after these on a scanned/OCR statement is
+    # check-image attachment noise (deposit tickets, pay-to-the-order
+    # blocks, memo lines, OCR-garbled letterheads). Hard-stop the parser
+    # rather than try to fish real transactions out of OCR jibberish.
+    "summary of fees",
+    "summary of fees for paying",
+    "summary of fees for paying and returning items",
+    "fees for paying",
+    "refunded fees for",
+    "for a change of name",
+    "for a change of address",
+    "how to balance your account",
+    "in case of errors or questions",
+    "hints for finding differences",
+    "clip and return",
 }
 
 _SECTION_MARKERS: dict[str, str] = {
@@ -1598,7 +1882,15 @@ def _build_row(
     if source == "easyocr" and conf == "High":
         conf = "Medium"
     if source == "easyocr":
-        review_reasons.append("OCR fallback path — verify amount + payee")
+        # v2.44.3: when the strict OCR parser already validated date + amount
+        # (the common case for the Auto Body Center test PDF), the only
+        # thing left to verify is the payee. The longer "verify amount +
+        # payee" wording was correct in v2.43 when the parser was producing
+        # bogus amounts; with the strict parser it's misleading noise.
+        if date and signed:
+            review_reasons.append("OCR fallback — verify payee")
+        else:
+            review_reasons.append("OCR fallback path — verify amount + payee")
         needs = "Yes"
 
     row = {
@@ -2057,13 +2349,567 @@ def _filter_balance_only_rows(
     out: list[dict[str, Any]] = []
     bad_desc = re.compile(
         r"(?i)^(ending|beginning|previous|new|current|available)\s+balance\b|"
-        r"^balance\s*(forward|brought\s*forward)?\s*$|^total\b"
+        r"^balance\s*(forward|brought\s*forward)?\s*$|^total\b|"
+        r"^statement\s+(summary|activity)\b|"
+        r"^\d+\s+(deposits?|withdrawals?|debits?|credits?|checks?)\s+and\s+other\b"
     )
     for row in transactions:
         desc = str(row.get("Description", "")).strip()
         if not desc or bad_desc.match(desc):
             continue
         out.append(row)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# v2.44 — Strict OCR-mode line parser
+# ---------------------------------------------------------------------------
+# The general-purpose `_parse_lines_to_transactions` does an OK job on clean
+# pdfplumber text but creates a mess on noisy EasyOCR output for scanned
+# statements: summary lines like "83 Withdrawals and Other Debits 41,403.63"
+# get turned into transactions, multi-amount Check Register rows collapse to
+# one row, continuation lines (MERCH BNKCD NSD DEPOSIT, Internet transfer
+# to checking 6247002) become standalone date-only rows, and the check-image
+# attachment pages (pages 5-9 on Auto Body Center Jan-26) flood the result
+# with OCR-garbled gibberish — including the infamous "MEM0393042022.77230"
+# memo line that produced a $393M withdrawal in v2.43.2.
+#
+# `_parse_ocr_lines_to_transactions` is a stricter walk that:
+#   1. Hard-stops at the first "Daily Account Balance" / "Summary of Fees"
+#      terminator — anything after that on a scanned statement is page
+#      footer / check-image attachments and should never be parsed.
+#   2. Only starts a new transaction when it sees a full MM/DD/YYYY (or
+#      MM/DD/YY) date prefix, never on a bare date fragment.
+#   3. Merges continuation lines (no date, no amount, not a section header)
+#      into the previous transaction's Description so MERCH BNKCD NSD DEPOSIT
+#      attaches to "01/20/2026 Ach deposit 499.22" instead of becoming a
+#      zero-amount sibling row. Capped at 2 continuation lines per row to
+#      keep descriptions tidy.
+#   4. Parses Check Register lines as 1-3 (date, check#, amount) triplets
+#      and produces one transaction per triplet with Check# populated so
+#      the v2.43 check-image matcher has something to link against.
+#   5. Aggressively skips OCR-junk lines (Terminal/Serial #, MEMO, DOLLARS,
+#      check-image deposit ticket headers, bank letterhead, page footer).
+#
+# Designed for the Traditions Bank layout but built from generic patterns
+# (section markers, ISO/MDY date, $ amounts) so it should hold up on most
+# US small-business bank statements without further tweaking.
+
+_CHECK_REG_TRIPLET_RE = re.compile(
+    r"(\d{1,2}[/-]\d{1,2})\s+\*?\s*(\d{3,6})\s*\*?\s+"
+    r"(\d{1,3}(?:,\d{3})*\.\d{2})"
+)
+_FULL_DATE_PREFIX_RE = re.compile(
+    r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})(?!\d)(?:\s+(.*))?$"
+)
+_OCR_JUNK_TERMINAL_RE = re.compile(r"(?i)\b(?:terminal\s+(?:d|i|did|id)\b|serial\s*#)")
+
+
+def _is_ocr_junk_text(line: str) -> bool:
+    """True for lines that are pure OCR noise — memos, gibberish, letterhead.
+
+    Used by the strict OCR parser to refuse merging a noisy continuation
+    line into the previous transaction's description, and to reject
+    fresh rows whose description would be unreadable downstream.
+    """
+
+    if not line:
+        return True
+    s = line.strip()
+    if len(s) < 3:
+        return True
+    if _OCR_JUNK_TERMINAL_RE.search(s):
+        return True
+    low = s.lower()
+    if low.startswith("memo") or low.startswith("dollars"):
+        return True
+    if low.startswith("pay to") or "order of" in low:
+        return True
+    if "deposit ticket" in low or "depobit ticket" in low:
+        return True
+    if low in {"on", "in", "by", "at", "to", "of", "the", "for"}:
+        return True
+    # Alphanumeric ratio — gibberish often has lots of punctuation/symbols.
+    total = len(s)
+    alnum = sum(1 for c in s if c.isalnum() or c.isspace())
+    if total >= 4 and (alnum / total) < 0.60:
+        return True
+    # Mostly digits and noise (no letters at all) — probably an account
+    # / routing / serial number fragment, not a description.
+    if not re.search(r"[A-Za-z]{2,}", s):
+        return True
+    return False
+
+
+def _is_meaningful_ocr_description(desc: str) -> bool:
+    """Reject descriptions that are too short or all-gibberish before commit."""
+
+    if not desc or len(desc.strip()) < 3:
+        return False
+    if not re.search(r"[A-Za-z]{2,}", desc):
+        return False
+    # Bare check-number fragments slipped through? Allow them; the caller
+    # will set Check# explicitly. Otherwise we keep ~92% of valid rows.
+    return True
+
+
+def _eft_ach_fix(text: str) -> str:
+    """Normalize the common EasyOCR misread "EFTIACH" → "EFT/ACH".
+
+    EasyOCR reads the slash in "EFT/ACH" as a capital I about half the
+    time on the Traditions Bank font. Done here (not in the OCR layer)
+    so the fix is local to description text and doesn't accidentally
+    touch a serial number or memo field.
+    """
+
+    return re.sub(r"\bEFT[I/]?ACH\b", "EFT/ACH", text, flags=re.IGNORECASE).replace(
+        "EFTIACH", "EFT/ACH"
+    )
+
+
+# Matches money tokens that may have OCR letter substitutions (O→0, I→1, l→1)
+# in either the integer or fractional part. Examples this catches:
+#   1,000.00   1,00O.OO   1,Ooo.00   I,000.00   l00.00
+_OCR_MONEY_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])\$?(?:[\dOoIl]{1,3}(?:,[\dOoIl]{3})+|[\dOoIl]+)\.[\dOoIl]{2}(?![A-Za-z0-9])"
+)
+
+
+def _preprocess_ocr_line(line: str) -> str:
+    """Fix common EasyOCR transcription errors in numeric / money tokens.
+
+    EasyOCR routinely mis-classifies digits 0/1 as letters O/l and
+    sometimes scatters whitespace around the thousands separator and
+    decimal point in scanned monetary amounts. Examples seen on the
+    Auto Body Center Jan-26 PDF:
+
+        ``1,00O.OO``              → ``1,000.00``
+        ``1 , Ooo. 00``           → ``1,000.00``
+        ``1,000.0O``              → ``1,000.00``
+        ``EFTIACH Debit 700.00``  → ``EFT/ACH Debit 700.00``
+
+    The cleanup is intentionally scoped to money-shaped tokens (digits
+    + thousands separator + decimal cents) so prose like
+    ``"Pay TO the order"`` is never accidentally rewritten to
+    ``"Pay 70 the order"``.
+    """
+
+    if not line:
+        return line
+
+    # Step 1: collapse OCR whitespace around the thousands separator and
+    # the decimal point when both neighbors look numeric (or are 0↔O).
+    s = re.sub(r"([\d])\s*,\s*([\dOoIl])", r"\1,\2", line)
+    s = re.sub(r"([\dOoIl])\s*\.\s*([\dOoIl])", r"\1.\2", s)
+
+    # Step 2: substitute O→0 / o→0 / I→1 / l→1 inside money tokens only.
+    def _fix(match: re.Match[str]) -> str:
+        tok = match.group(0)
+        return (
+            tok.replace("O", "0").replace("o", "0").replace("I", "1").replace("l", "1")
+        )
+
+    s = _OCR_MONEY_TOKEN_RE.sub(_fix, s)
+
+    # Step 3: normalize EFTIACH / EFT|ACH variants in-line so the amount
+    # parser doesn't confuse "Debit 1,000.00" with the I in EFTIACH.
+    s = _eft_ach_fix(s)
+    return s
+
+
+_DATE_ONLY_RE = re.compile(r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*$")
+_LEADING_DATE_RE = re.compile(r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})(?!\d)")
+_HAS_AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{3})*\.\d{2}")
+_VERB_HINT_RE = re.compile(
+    r"(?i)\b(ach|eft/?ach|eftiach|debit|credit|withdrawal|deposit|"
+    r"transfer|wire|check|payment|pos|merch|paypal|venmo|zelle|"
+    r"card|atm|service|charge|fee|epay)\b"
+)
+
+
+def _fuse_split_date_lines(lines: list[str]) -> list[str]:
+    """Fuse adjacent OCR lines where the statement's date column got split.
+
+    Traditions Bank (and other small-bank layouts) prints each
+    transaction with its date in the leftmost column, but EasyOCR's
+    y-bucket line reconstruction occasionally separates the date into
+    its own line. We see three flavors on the Auto Body Center Jan-26
+    PDF that all drop transactions or corrupt descriptions when fed
+    unmodified through the strict parser:
+
+    **Pattern A** — date arrives AFTER the verb+amount line ::
+
+        "Ach withdrawal 34.65"      -> "01/12/2026 Ach withdrawal 34.65"
+        "01/12/2026"                   (line removed)
+        "CLOVFR FFES CLOVFR FEE"       (unchanged, becomes continuation)
+
+    **Pattern B** — date arrives BEFORE a verb-only line that belongs
+    to the same transaction ::
+
+        "Ach withdrawal"            -> "01/28/2026 Ach withdrawal 226.05"
+        "01/28/2026 226.05"            (consumed into preceding line)
+        "WOODMEN,OMAHA NE PREMUM"      (unchanged, becomes continuation)
+
+    **Pattern C** — date is alone on its line, next line is verb+amount
+    with no date of its own (seen on the Auto Body Center 01/05 Texaco
+    72.00 debit, where the bucketed y-positions split the date off) ::
+
+        "01/05/2026"                -> "01/05/2026 Debit Card Transaction 72.00"
+        "Debit Card Transaction 72.00" (consumed)
+        "TEXACO 0302812 CULLMAN AL"    (unchanged, becomes continuation)
+
+    All patterns are only triggered when the candidate verb line
+    contains a clear transaction-verb keyword (ACH / EFT / Debit Card /
+    PayPal / etc.) so we never accidentally fuse genuine free-text
+    description lines with adjacent date markers.
+    """
+
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        if i + 1 < n:
+            nxt = lines[i + 1].strip()
+
+            # Pattern A: current line is "<verb> <amount>" with no date,
+            # next line is just a date.
+            date_only_m = _DATE_ONLY_RE.match(nxt)
+            if (
+                date_only_m
+                and not _LEADING_DATE_RE.match(line)
+                and _HAS_AMOUNT_RE.search(line)
+                and _VERB_HINT_RE.search(line)
+            ):
+                out.append(f"{date_only_m.group(1)} {line}")
+                i += 2
+                continue
+
+            # Pattern C: current line is just a date, next line has the
+            # verb + amount (no date). EasyOCR bucketed the date into a
+            # separate y-row from the rest of the transaction row.
+            date_only_cur_m = _DATE_ONLY_RE.match(line)
+            if (
+                date_only_cur_m
+                and not _LEADING_DATE_RE.match(nxt)
+                and _HAS_AMOUNT_RE.search(nxt)
+                and _VERB_HINT_RE.search(nxt)
+            ):
+                out.append(f"{date_only_cur_m.group(1)} {nxt}")
+                i += 2
+                continue
+
+            # Pattern B: current line is a short verb-only line, next
+            # line has a date AND an amount BUT no verb of its own. The
+            # "no verb on next line" guard is crucial — without it we
+            # accidentally hoist genuine continuation lines (PAYPAL NNST
+            # XFER, MERCH BNKCD NSD DEPOSIT, Regular Deposit) into the
+            # next transaction row, corrupting both rows.
+            nxt_date_m = _LEADING_DATE_RE.match(nxt)
+            if (
+                nxt_date_m
+                and not _LEADING_DATE_RE.match(line)
+                and not _HAS_AMOUNT_RE.search(line)
+                and _HAS_AMOUNT_RE.search(nxt)
+                and _VERB_HINT_RE.search(line)
+                and len(line.split()) <= 4
+            ):
+                date_str = nxt_date_m.group(1)
+                nxt_rest = nxt[nxt_date_m.end() :].strip()
+                if not _VERB_HINT_RE.search(nxt_rest):
+                    out.append(f"{date_str} {line} {nxt_rest}".strip())
+                    i += 2
+                    continue
+
+        out.append(line)
+        i += 1
+    return out
+
+
+_DATE_AMT_NO_CHECK_RE = re.compile(
+    r"(\d{1,2}[/-]\d{1,2})\s+(\d{1,3}(?:,\d{3})*\.\d{2})(?:\s+|$)"
+)
+_BARE_CHECK_NUM_RE = re.compile(r"^\s*(\d{4})\s*$")
+
+
+def _splice_orphan_check_numbers(lines: list[str]) -> list[str]:
+    """Splice bare check numbers floated to their own line into the
+    check-register triplet that should have contained them.
+
+    EasyOCR occasionally drops one of the three check numbers in a
+    3-triplet check-register row to its own y-bucket. Example seen on
+    Auto Body Center Jan-26 ::
+
+        "01/08 905.80 01/22 2505 340.97 01/29 2527 643.49"  (missing 2488)
+        "2488"                                                (orphan)
+
+    We detect this by scanning each line for a "<date> <amount>" pair
+    with no intervening check number (using ``_DATE_AMT_NO_CHECK_RE``)
+    and, if the *next* line is a bare 4-digit number that is NOT itself
+    a valid check-register triplet line, we splice it in. Cheap and
+    conservative — only fires when both halves of the pattern match.
+    """
+
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        # Look for a "<date> <amount>" pair at the very front of the
+        # line with no check number between them. Only mutate when the
+        # next line is a bare 4-digit check candidate.
+        if (
+            i + 1 < n
+            and _CHECK_REG_TRIPLET_RE.search(line) is None
+            and (m := _DATE_AMT_NO_CHECK_RE.match(line))
+            and (bare := _BARE_CHECK_NUM_RE.match(lines[i + 1].strip()))
+        ):
+            date_str, amt_str = m.group(1), m.group(2)
+            check_no = bare.group(1)
+            rest = line[m.end() :].strip()
+            spliced = f"{date_str} {check_no} {amt_str}"
+            if rest:
+                spliced = f"{spliced} {rest}"
+            out.append(spliced)
+            i += 2
+            continue
+        # Also handle the more general case: any line that already has
+        # one or two triplets but starts with a "<date> <amount>" pair
+        # (instead of "<date> <check> <amount>"). The bare orphan must
+        # be on the very next line.
+        if (
+            i + 1 < n
+            and (mm := _DATE_AMT_NO_CHECK_RE.match(line))
+            and _CHECK_REG_TRIPLET_RE.search(line)
+            and (bare2 := _BARE_CHECK_NUM_RE.match(lines[i + 1].strip()))
+        ):
+            date_str = mm.group(1)
+            amt_str = mm.group(2)
+            check_no = bare2.group(1)
+            rest = line[mm.end() :].strip()
+            spliced = f"{date_str} {check_no} {amt_str}"
+            if rest:
+                spliced = f"{spliced} {rest}"
+            out.append(spliced)
+            i += 2
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
+def _parse_ocr_lines_to_transactions(
+    lines: list[str], default_year: int
+) -> list[dict[str, Any]]:
+    """Strict OCR-mode parser — see module docstring above for design notes."""
+
+    # Step 0a: clean up OCR letter↔digit substitutions and whitespace so
+    # the amount regex can actually fire on lines like "1 , Ooo. 00".
+    lines = [_preprocess_ocr_line(raw) for raw in lines]
+    # Step 0b: fuse split date-from-row patterns A, B, C (see helper above).
+    lines = _fuse_split_date_lines(lines)
+    # Step 0c: splice orphan check numbers back into their check-register
+    # triplet. EasyOCR sometimes drops one of the three check numbers in
+    # a 3-triplet row to its own line (we saw "01/08 905.80 01/22 2505
+    # 340.97 01/29 2527 643.49" + "2488" on Auto Body Center Jan-26).
+    lines = _splice_orphan_check_numbers(lines)
+
+    out: list[dict[str, Any]] = []
+    current_section: str | None = None
+    terminated = False
+
+    # Pending row state: we saw at least one half of a transaction (a
+    # date, an amount, or partial desc) and are accumulating the rest
+    # across the next couple of lines. Common splits on EasyOCR output:
+    #   - "01/16/2026 1,177.00" then "Regular Deposit" (date+amt, desc next)
+    #   - "01/07/2026 Ach withdrawal" then "30.52" then "PAYPAL NNST XFER"
+    pending: dict[str, Any] | None = None
+    last_row: dict[str, Any] | None = None
+    last_row_continuations = 0
+    MAX_CONTINUATIONS = 2
+
+    def _try_commit_pending(*, force_drop: bool = False) -> None:
+        """Commit pending if it has date+amount+meaningful desc.
+
+        When ``force_drop`` is True (called at section / new-date / EOL
+        boundaries), an incomplete pending row is discarded. Otherwise
+        pending stays alive so a follow-on line can supply the missing
+        description / amount.
+        """
+
+        nonlocal pending, last_row, last_row_continuations
+        if pending is None:
+            return
+        date_ok = bool(pending.get("date"))
+        amt_ok = pending.get("amount") is not None
+        desc = _eft_ach_fix(_strip_trailing_amounts((pending.get("desc") or "").strip()))
+        desc_ok = _is_meaningful_ocr_description(desc)
+        if date_ok and amt_ok and desc_ok:
+            chk = _extract_check_number(desc) or pending.get("check_num", "")
+            row = _build_row(
+                date=pending["date"],
+                description=desc,
+                amount=pending["amount"],
+                check_num=chk,
+                year_month=pending.get("ym", ""),
+                default_year=default_year,
+                section=current_section,
+                source="easyocr",
+            )
+            out.append(row)
+            last_row = row
+            last_row_continuations = 0
+            pending = None
+        elif force_drop:
+            pending = None
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+
+        # 1) Section markers / terminators ---------------------------------
+        sec = _detect_section(line)
+        if sec == "end":
+            _try_commit_pending(force_drop=True)
+            current_section = None
+            last_row = None
+            terminated = True
+            continue
+        if terminated:
+            # Hard-stop: nothing after Daily Account Balance / Summary of
+            # Fees ever produces a transaction on a scanned statement.
+            continue
+        if sec:
+            _try_commit_pending(force_drop=True)
+            # When the section header is just repeated (page break /
+            # "(continued)") keep `last_row` alive so a continuation line
+            # arriving right after the repeat (PAYPAL NNST XFER, etc.)
+            # still attaches to the prior transaction. Only reset on a
+            # genuine section transition (credit→debit→check→end).
+            if sec != current_section:
+                last_row = None
+                last_row_continuations = 0
+            current_section = sec
+            continue
+
+        # 2) Pure noise / summary lines ------------------------------------
+        if _should_skip_line(line):
+            continue
+
+        # 3) Check Register multi-triplet rows -----------------------------
+        # Lines like "01/20 2419 100.00 01/14 2491 275.03 01/27 2508 99.37"
+        # collapse to one transaction in the old parser. Here we extract
+        # every (date, check#, amount) triplet and emit one row each.
+        if current_section == "check":
+            triplets = _CHECK_REG_TRIPLET_RE.findall(line)
+            if triplets:
+                _try_commit_pending(force_drop=True)
+                for date_str, check_no, amt_str in triplets:
+                    iso, ym = _normalize_date(date_str, default_year)
+                    if not iso:
+                        continue
+                    try:
+                        amt = float(amt_str.replace(",", ""))
+                    except ValueError:
+                        continue
+                    row = _build_row(
+                        date=iso,
+                        description=f"Check #{check_no}",
+                        amount=-abs(amt),
+                        check_num=check_no,
+                        year_month=ym,
+                        default_year=default_year,
+                        section="check",
+                        source="easyocr",
+                    )
+                    out.append(row)
+                last_row = None
+                continue
+            # No triplets — probably a header row, "Denotes missing check",
+            # or a stray check-image OCR fragment. Don't try to parse it.
+            continue
+
+        # 4) Try to start a new transaction with a full date prefix --------
+        full = _FULL_DATE_PREFIX_RE.match(line)
+        if full:
+            _try_commit_pending(force_drop=True)
+            date_str, rest = full.group(1), (full.group(2) or "").strip()
+            iso, ym = _normalize_date(date_str, default_year)
+            if not iso:
+                # Unparseable date — fall through and treat as continuation
+                # of the last row if any.
+                continue
+            amounts = _parse_amounts(rest)
+            clean_desc = _strip_trailing_amounts(_AMOUNT_RE.sub("", rest).strip())
+            pending = {
+                "date": iso,
+                "ym": ym,
+                "desc": clean_desc,
+                "amount": _pick_transaction_amount(amounts) if amounts else None,
+            }
+            # Try to commit now; if desc is empty/short, _try_commit_pending
+            # keeps pending alive so the next line can supply the missing
+            # description (the "01/16/2026 1,177.00\nRegular Deposit" case).
+            _try_commit_pending()
+            continue
+
+        # 5) Bare amount line — usually completes a pending date+desc row
+        amounts = _parse_amounts(line)
+        if amounts and pending is not None and pending.get("amount") is None:
+            amt = _pick_transaction_amount(amounts)
+            # Any non-numeric text on this line becomes part of the desc
+            # (e.g. "30.52 PAYPAL NNST XFER" supplies both).
+            extra = _strip_trailing_amounts(_AMOUNT_RE.sub("", line).strip())
+            if extra and not _is_ocr_junk_text(extra):
+                pending["desc"] = ((pending["desc"] or "") + " " + extra).strip()
+            pending["amount"] = amt
+            _try_commit_pending()
+            continue
+
+        if amounts:
+            # Bare amount with no pending row — skip (probably an OCR'd
+            # running balance or check-image fragment).
+            continue
+
+        # 6) Continuation line for the pending row (still gathering desc) --
+        # Handles both "date+amt waiting for desc" and "date+desc waiting
+        # for amount" — either way, append meaningful text to pending.desc
+        # and re-try the commit.
+        if pending is not None:
+            if not _is_ocr_junk_text(line):
+                merged = ((pending.get("desc") or "") + " " + line).strip()
+                if len(merged) <= 120:
+                    pending["desc"] = merged
+                _try_commit_pending()
+            continue
+
+        # 7) Continuation line for the last committed row -------------------
+        # Folds e.g. "MERCH BNKCD NSD DEPOSIT" onto the prior
+        # "Ach deposit 499.22" row's description.
+        if last_row is not None and last_row_continuations < MAX_CONTINUATIONS:
+            if not _is_ocr_junk_text(line):
+                merged = (str(last_row.get("Description", "")) + " " + line).strip()
+                merged = _eft_ach_fix(_strip_trailing_amounts(merged))
+                if len(merged) <= 120:
+                    last_row["Description"] = merged
+                    last_row["Payee"] = _infer_payee_from_description(
+                        merged, str(last_row.get("Check#", ""))
+                    )
+                    last_row_continuations += 1
+            continue
+
+        # 8) Otherwise drop. Catches gibberish standalone lines on check
+        # attachment pages — anything that doesn't fit a known shape.
+
+    _try_commit_pending(force_drop=True)
     return out
 
 
