@@ -86,7 +86,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 - `Scripts/health_check.py`, `Scripts/init_db.py`, `Scripts/migrate_to_postgres.py` — Postgres lifecycle.
 - `Scripts/PowerShell/Deploy-ToAzure.ps1` + `Build-AzureDeployZip.ps1` — modern safe deploy path.
 - `.devcontainer/` — GitHub Codespaces definition (devcontainer.json + 7-stage postCreateCommand.sh).
-- `docs/deployment.md` and `docs/local-development.md` — detailed operational recipes (extracted from prior README bloat).
+- `docs/deployment.md`, `docs/local-development.md`, `docs/codespaces-connection-recipe.md`, and `docs/proposed-state-alignment-process.md` — detailed operational recipes and future-process proposals.
 - `.cursor/rules/slam-services.mdc` and `.grok/AGENT.md` — the two thin agent contracts.
 - `Data/Revenue_Tracker_Migration/` — source CSVs (local only; never committed).
 
@@ -130,7 +130,9 @@ This is the **single authoritative map** of every document’s defined purpose. 
 │       └── POST_SPIKE_INTEGRATION_PLAN.md
 ├── docs/                          # Detailed operational guides (extracted from old README)
 │   ├── deployment.md              # All Azure deploy paths + recovery runbooks
-│   └── local-development.md       # Codespaces, local venv, Postgres dev workflow
+│   ├── local-development.md       # Codespaces, local venv, Postgres dev workflow
+│   ├── codespaces-connection-recipe.md  # How to reliably connect agents to the primary heavy-OCR Codespace
+│   └── proposed-state-alignment-process.md  # Lightweight future template for proactive doc/feature gap reviews (not yet active)
 ├── CONSTITUTION.md
 ├── README.md                      # You are here (onboarding + roles matrix)
 ├── SLAM Services - Digital Transformation Blueprint.md
@@ -160,6 +162,8 @@ This is the **single authoritative map** of every document’s defined purpose. 
 
 - [docs/local-development.md](docs/local-development.md) — Codespaces setup, local venv, Local Enhanced OCR one-time install, PostgreSQL round-trip testing, health commands.
 - [docs/deployment.md](docs/deployment.md) — Modern `Deploy-ToAzure.ps1` path, manual steps, GitHub Actions, Kudu data uploads, full `RemoteDisconnected` recovery runbook, important App Settings.
+- [docs/codespaces-connection-recipe.md](docs/codespaces-connection-recipe.md) — Reliable agent connection recipe for the primary heavy-OCR Codespace (`slam-v2-44-codespaces-migration`).
+- [docs/proposed-state-alignment-process.md](docs/proposed-state-alignment-process.md) — Minimal template for the future proactive state-driven documentation/feature alignment system (logged as future work in Blueprint).
 
 All long-form historical narrative, architecture rationale, and detailed decision records live in the **Blueprint**.
 
