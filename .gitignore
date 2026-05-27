@@ -121,3 +121,28 @@ node_modules/
 Export-KiloCode-Output
 .kilocode
 docs-backups/
+
+# ==================== G1 Spike & Heavy Diagnostic Output (2026-05-27) ====================
+# Per owner decision: only selected high-value parts of the G1 spike will be committed later.
+# Heavy output (images, JSON diagnostics, large run artifacts) must never enter the repo.
+Scripts/spike/artifacts/
+Scripts/spike/**/artifacts/
+
+# ==================== Working / Session Notes (temporary) ====================
+# Decision briefs, sprint planning notes, and Cursor session transcripts.
+# These will be reevaluated after the current G1 integration sprint.
+# Do not commit unless explicitly promoted.
+Documents/
+
+# ==================== One-off Review & Test Artifacts ====================
+# Historical review outputs and ad-hoc test scripts with no ongoing purpose.
+git-review-v2.37.txt
+v2.37-final-review.txt
+test_fast_vs_strict.py
+*_review.txt
+*review-v*.txt
+
+# ==================== Historical Carryover Documents ====================
+# "Business problem.docx" was a carryover from the original Power Apps initiation.
+# It has no active purpose in the current Python/Streamlit project.
+Business problem.docx
