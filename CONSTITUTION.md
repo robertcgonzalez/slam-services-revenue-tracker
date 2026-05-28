@@ -43,7 +43,7 @@ These are immutable:
 **Core rules for all agents**:
 - The Documentation Roles Matrix in README.md is the single authoritative map of every document’s purpose. Read it before any documentation work.
 - Follow the **anti-bloat / role-respect** standing order: never introduce duplication. Content must live in exactly one place according to the roles.
-- Follow the **git authority via confirmation** rule: you may perform git operations only after executing and logging the full local verification sequence.
+- Follow the **git workflow (autonomous with mandatory verification)** rule: agents must automatically execute and log the full local verification sequence before any git operations, then proceed with commit + push to origin main when clean. Only pause for human review when verification flags issues.
 - Thin agent contracts (`.cursor/rules/slam-services.mdc` and `.grok/AGENT.md`) are the only things that belong in an agent’s default context window. Everything else is referenced by pointer, not embedded.
 
 ---

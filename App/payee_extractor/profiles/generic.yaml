@@ -1,0 +1,20 @@
+# Default hardened profile (E1 cross-bank behavior).
+bank_id: generic
+legacy_mode: false
+anchor_phrases:
+  - "order of"
+  - "pay to"
+  - "asper of"
+  - "to the"
+  - "to vill"
+post_anchor_scan: 5
+whole_crop_scan: true
+fallback_mode: best_ranked
+ranking_mode: multi_candidate
+spatial:
+  enabled: false
+  y_min: 0.13
+  y_max: 0.38
+  y_penalty_below: 0.12
+  y_penalty_above: 0.55
+denylist_bank_id: null

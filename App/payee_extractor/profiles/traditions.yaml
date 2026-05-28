@@ -1,0 +1,17 @@
+# Traditions-family check stock — anchor-window ranking only; legacy fallback order.
+bank_id: traditions
+legacy_mode: false
+anchor_phrases:
+  - "order of"
+  - "pay to"
+post_anchor_scan: 3
+whole_crop_scan: false
+fallback_mode: first_in_order
+ranking_mode: multi_candidate
+spatial:
+  enabled: false
+  y_min: 0.15
+  y_max: 0.45
+  y_penalty_below: 0.10
+  y_penalty_above: 0.70
+denylist_bank_id: traditions

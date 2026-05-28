@@ -1,0 +1,49 @@
+# First Metro / composite GO statements (QCR B5 pilot).
+# Extends regions ranking; add client payer substring from statement header.
+bank_id: first_metro
+legacy_mode: false
+anchor_phrases:
+  - "order of"
+  - "pay to"
+  - "asper of"
+  - "order ofe"
+  - "ty to the"
+  - "to vill"
+  - "to the"
+  - "pay"
+post_anchor_scan: 8
+whole_crop_scan: true
+fallback_mode: best_ranked
+ranking_mode: multi_candidate
+spatial:
+  enabled: true
+  y_min: 0.13
+  y_max: 0.38
+  y_penalty_below: 0.12
+  y_penalty_above: 0.52
+denylist_bank_id: regions
+signature_markers:
+  primary_substrings:
+    - "authorized sign"
+  paired_substrings:
+    - ["authorized", "sionature"]
+    - ["authorized", "signatur"]
+    - ["authorized", "signal"]
+    - ["authoriz", "sign"]
+scoring:
+  signature_zone:
+    boost_after: 16
+    boost_immediate_next: 10
+  business_block_penalty:
+    substrings: []
+    penalty: 0
+    singleton_variants: []
+    singleton_penalty: 0
+  payer_header_penalty:
+    substrings:
+      - "quality choice roofing"
+    penalty: -24
+    generic_suffix_enabled: true
+    generic_suffix_penalty: -14
+    top_band_y_max: 0.22
+    top_band_extra_penalty: -6

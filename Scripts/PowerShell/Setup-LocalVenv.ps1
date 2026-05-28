@@ -15,7 +15,8 @@
   streamlit run App/app.py
 #>
 param(
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
+    [switch]$InstallHeavyOcr
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,4 +51,32 @@ Write-Host "Verifying imports..." -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Done. Activate with: .\.venv\Scripts\Activate.ps1" -ForegroundColor Green
-Write-Host "Run app: streamlit run App/app.py"
+Write-Host "Run app: streamlit run App/app.py" -ForegroundColor Green
+
+if ($InstallHeavyOcr) {
+    Write-Host ""
+    Write-Host "Installing heavy OCR + CV packages..." -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot "Install-LocalHeavyOcr.ps1") -RepoRoot $RepoRoot
+}
+
+Write-Host ""
+Write-Host "=== For Local Enhanced OCR + Azure CV check leg work ===" -ForegroundColor Yellow
+Write-Host "After activating the venv, run:" -ForegroundColor Yellow
+Write-Host "  .\Scripts\PowerShell\Install-LocalHeavyOcr.ps1" -ForegroundColor Cyan
+Write-Host "  (or re-run this script with -InstallHeavyOcr)" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "IMPORTANT for pdf2image (check cropper) on Windows:" -ForegroundColor Red
+Write-Host "  You MUST have poppler in your PATH. Non-admin method:" -ForegroundColor Red
+Write-Host "  1. Download latest from: https://github.com/oschwartz10612/poppler-windows/releases" -ForegroundColor Cyan
+Write-Host "  2. Extract to a permanent folder, e.g. C:\Tools\poppler" -ForegroundColor Cyan
+Write-Host "  3. Add C:\Tools\poppler\Library\bin to your User PATH (System Properties → Environment Variables)" -ForegroundColor Cyan
+Write-Host "  4. Restart this terminal completely." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Then create a .env file with AZURE_CV_ENDPOINT / AZURE_CV_KEY or SLAM_CV_CACHE_DIR for the CV path." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "To run the app on Windows (recommended):" -ForegroundColor Green
+Write-Host "  .\run_local.ps1" -ForegroundColor Green
+Write-Host "  (loads .env, sets PYTHONPATH, checks poppler)" -ForegroundColor Green
+Write-Host ""
+Write-Host "To test imports (when diagnosing):" -ForegroundColor Yellow
+Write-Host '  $env:PYTHONPATH = "App"; python -c "import local_enhanced_ocr; print(local_enhanced_ocr.detect_capabilities())"' -ForegroundColor Cyan

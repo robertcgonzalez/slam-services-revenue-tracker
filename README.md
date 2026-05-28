@@ -10,65 +10,26 @@
 
 ## Quick Start
 
-### Recommended: GitHub Codespaces (only supported heavy OCR environment)
+### Local Windows (primary)
 
-The heavy Local Enhanced OCR pipeline (EasyOCR + OpenCV check cropper + payee extraction) is painful to set up on a fresh Windows or macOS machine. GitHub Codespaces (especially the 4-core/16 GB SKU) is the **only supported environment** for speed, consistency, and standardized heavy-OCR validation.
+All development and testing runs on your machine. There is no Docker or GitHub Codespaces dev-container path in this repo.
 
-1. GitHub repo → **Code** → **Codespaces** → **Create codespace on main** (prefer the 4-core/16 GB machine type).
-2. Wait for the post-create script (poppler + `.venv` + heavy OCR libs + EasyOCR model pre-warm).
-3. In the terminal:
-
-   ```bash
-   slam-run     # streamlit run App/app.py (port 8501 auto-forwarded)
-   ```
-
-4. Open the forwarded URL and log in with the password Robert provides.
-
-See [docs/local-development.md](docs/local-development.md) for full Codespaces details, aliases (`slam-info`, `slam-lint`, etc.), and DPI tuning.
-
-### First-time onboarding for another user (low-friction)
-
-Canonical guide for Laura/Stef/Patty:
-
-- `Scripts/Onboarding-for-Laura-Codespaces.md`
-
-Quick version:
-
-1. Install GitHub CLI, Git, and VS Code.
-2. Authenticate once:
-
-   ```bash
-   gh auth login --scopes codespace
-   ```
-
-3. Optional scripted auth (PAT in local gitignored `.env`):
-
-   ```bash
-   # .env (local only, never committed)
-   SLAM_GH_TOKEN=ghp_xxx...
-   bash Scripts/setup-codespace-auth.sh
-   ```
-
-4. Create/connect to a Codespace and start app:
-
-   ```bash
-   gh cs list
-   gh cs ssh <codespace-name>
-   cd /workspaces/SLAM-Services-Project
-   source .venv/bin/activate
-   slam-run
-   ```
-
-### Local Windows (light work only)
+**Prerequisites**: Python 3.10 (`py -3.10`), Git, and [poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases) (`pdftoppm` on PATH).
 
 ```powershell
 cd C:\SLAM-Services-Project
-.\Scripts\PowerShell\Setup-LocalVenv.ps1
-.\.venv\Scripts\Activate.ps1
-streamlit run App/app.py
+.\Scripts\PowerShell\Setup-LocalVenv.ps1 -InstallHeavyOcr
+copy Scripts\spike\cv-read.env.sample .env   # edit AZURE_CV_* or SLAM_CV_CACHE_DIR
+.\run_local.ps1
 ```
 
-Heavy OCR validation is Codespaces-only; do not use local Windows for Local Enhanced OCR pipeline regression evidence.
+Open http://localhost:8501. For heavy OCR only after the base venv exists:
+
+```powershell
+.\Scripts\PowerShell\Install-LocalHeavyOcr.ps1
+```
+
+Full guide: [docs/local-development.md](docs/local-development.md). Environment policy: [docs/environment-policy.md](docs/environment-policy.md).
 
 ### Health checks
 
@@ -79,16 +40,24 @@ python Scripts/health_check.py --full
 
 ---
 
-## Current Status (May 28, 2026 — Blueprint v2.44.10)
+## Current Status (May 28, 2026 — Blueprint v2.44.16)
 
-- **Development environment**: GitHub Codespaces is the only supported heavy-OCR environment (`.devcontainer/` is retained to provision Codespaces).
-- **G1 Sprint 3.2**: Hybrid CV check leg wired in `App/local_enhanced_ocr.py` (default-off; strict path unchanged). Historical local Docker artifacts remain as record, but future heavy validation guidance is Codespaces-only.
+- **Development environment**: Local Windows only (including heavy OCR and Azure CV). No Docker/Codespaces dev container in repo.
+- **G1 Sprint 3.4 (v2.44.13)**: CV round-trip complete — hybrid payees drive the final transaction table; see `Documents/cursor_g1_sprint_3_4_pipeline_finalization.md`.
+- **G1 Sprint 3.4+ (v2.44.14)**: Bank Statements has no processing-mode radio — the app auto-runs the richest pipeline. Azure CV is the **only** reader for cropped check/deposit images (no EasyOCR on crops).
+- **G1 Sprint 3.2**: Hybrid CV check leg wired in `App/local_enhanced_ocr.py`. Validate on local Windows.
 - **Bank Statements core workflow**: Upload PDF → Lightweight Parser / Local Enhanced OCR (Robert) / Azure OCR (parked) / paste Grok CSV → automated reconciliation → persistent payee rules engine (v2.39) with **💡 Learn this mapping** → Mark as Received.
 - **G1 Hybrid CV Check Leg spike (Phases 0–7)**: Complete and isolated under `Scripts/spike/`. Strong results (7× clean-payee improvement on the hardest PDF). Owner decision B1 (Traditions-first integration sprint) approved. Feature-flagged; EasyOCR strict path remains the production default.
 - **Azure OCR Function**: `slam-ocr-function` (Y1 Consumption) exists but is parked on the v2.41 skeleton pending infra decision. The full v2.43/v2.44.3 intelligent check-linking pipeline is available locally via the in-process `App/local_enhanced_ocr.py`.
 - **Production PostgreSQL**: Provisioned and migrated; CSV mode remains the zero-disruption fallback.
 - **Daily driver (Laura/Stef)**: Dashboard, Revenue Requests, Bank Statements, quick views, payee rules, and UAT stabilization all live on the F1 App Service.
 - **Full history**: See the Blueprint Change Log (v2.30 → v2.44.5) for every architectural decision, spike, and hygiene pass.
+
+---
+
+## Azure CV on check photos (Local Enhanced)
+
+**Local Enhanced OCR** uses Azure Computer Vision Read on imaging-page check crops when `AZURE_CV_ENDPOINT` + `AZURE_CV_KEY` or `SLAM_CV_CACHE_DIR` are set in `.env` (see `Scripts/spike/cv-read.env.sample`). That is the **only** automated reader for crop images — EasyOCR is used for full-page tabular fallback only, never on individual check crops. Without CV creds or cache, crops are still produced for review but payee intelligence from photos is skipped.
 
 ---
 
@@ -107,7 +76,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 | Document | Primary Consumer | Defined Role & Purpose | What Belongs Here (and only here) | What Does **Not** Belong Here |
 |----------|------------------|------------------------|-----------------------------------|-------------------------------|
 | `SLAM Services - Digital Transformation Blueprint.md` | Humans + agents (deep reference) | **Living Single Source of Truth + complete project history**. The authoritative record of vision, architecture, decisions, roadmap, SDLC, and all major milestones. | Full Change Log (narrative history), executive summary, phased roadmap, technical architecture, stakeholder map, risk/decision logs, Section 14 feedback system, detailed "why" behind every significant change. | Day-to-day commands, quick-start recipes, injected agent constraints (keep thin), the "map" of which doc does what. |
-| `README.md` | Humans (onboarding + daily reference) + agents (cross-reference) | **Practical human onboarding, current status snapshot, command reference, and the single authoritative "Documentation Roles & Agent Workflow" guide**. The one place anyone looks first to understand how to work with the project and where information lives. | Current status banner, Quick Start, Codespaces/local/Azure health recipes (entry points), this Documentation Roles Matrix, folder structure, project goals. Detailed procedural guides live in `docs/`. | Long historical narrative (belongs in Blueprint), hard agent prompt constraints (belong in the two injected contracts). |
+| `README.md` | Humans (onboarding + daily reference) + agents (cross-reference) | **Practical human onboarding, current status snapshot, command reference, and the single authoritative "Documentation Roles & Agent Workflow" guide**. The one place anyone looks first to understand how to work with the project and where information lives. | Current status banner, Quick Start, local/Azure health recipes (entry points), this Documentation Roles Matrix, folder structure, project goals. Detailed procedural guides live in `docs/`. | Long historical narrative (belongs in Blueprint), hard agent prompt constraints (belong in the two injected contracts). |
 | `.cursor/rules/slam-services.mdc` | Cursor (Composer / Agent / inline edit) — **always injected** | **Lean, self-contained primary agent contract**. Contains only the non-negotiable rules that must be in Cursor's context window on every invocation. | Agent role declaration (Cursor lead), reference to Blueprint + README, the two core standing orders (anti-bloat/role-respect + git via thorough confirmation), security/Laura-confidence, verification habits, tech stack pointers, one-sentence pointer to this matrix. | Long explanations, history, commands, the full matrix (pointer only). Must stay minimal. |
 | `.grok/AGENT.md` | Grok 4.3 (this TUI and other Grok-assisted sessions) — **secondary agent** | **Official Grok secondary agent context** (canonical location). Carries the same hard constraints as the Cursor contract so Grok sessions stay consistent with project rules. | Same two core standing orders (anti-bloat + git confirmation), updated "Cursor primary + Grok secondary" reality, pointer to this matrix. Short and focused. | Anything that duplicates the Cursor contract or the human docs. |
 
@@ -119,8 +88,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 - `App/local_enhanced_ocr.py` — v2.44.3 in-process port of the intelligent check-linking pipeline.
 - `Scripts/health_check.py`, `Scripts/init_db.py`, `Scripts/migrate_to_postgres.py` — Postgres lifecycle.
 - `Scripts/PowerShell/Deploy-ToAzure.ps1` + `Build-AzureDeployZip.ps1` — modern safe deploy path.
-- `.devcontainer/` — GitHub Codespaces definition (devcontainer.json + 7-stage postCreateCommand.sh).
-- `docs/deployment.md`, `docs/local-development.md`, `docs/codespaces-connection-recipe.md`, and `docs/proposed-state-alignment-process.md` — detailed operational recipes and future-process proposals.
+- `docs/deployment.md`, `docs/local-development.md`, and `docs/proposed-state-alignment-process.md` — detailed operational recipes and future-process proposals.
 - `.cursor/rules/slam-services.mdc` and `.grok/AGENT.md` — the two thin agent contracts.
 - `Data/Revenue_Tracker_Migration/` — source CSVs (local only; never committed).
 
@@ -132,10 +100,6 @@ This is the **single authoritative map** of every document’s defined purpose. 
 
 ```
 .
-├── .devcontainer/                 # GitHub Codespaces (Python 3.10 + full OCR stack)
-│   ├── devcontainer.json
-│   ├── Dockerfile
-│   └── postCreateCommand.sh       # 7-stage provisioner (poppler, venv, heavy libs, aliases)
 ├── .github/workflows/
 │   └── deploy-azure.yml           # Active GitHub Actions deploy (clean: false)
 ├── .vscode/                       # Shared team settings (committed)
@@ -164,8 +128,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 │       └── POST_SPIKE_INTEGRATION_PLAN.md
 ├── docs/                          # Detailed operational guides (extracted from old README)
 │   ├── deployment.md              # All Azure deploy paths + recovery runbooks
-│   ├── local-development.md       # Codespaces, local venv, Postgres dev workflow
-│   ├── codespaces-connection-recipe.md  # How to reliably connect agents to the primary heavy-OCR Codespace
+│   ├── local-development.md       # Local venv, Postgres dev workflow
 │   └── proposed-state-alignment-process.md  # Lightweight future template for proactive doc/feature gap reviews (not yet active)
 ├── CONSTITUTION.md
 ├── README.md                      # You are here (onboarding + roles matrix)
@@ -194,9 +157,8 @@ This is the **single authoritative map** of every document’s defined purpose. 
 
 ## Deep Guides
 
-- [docs/local-development.md](docs/local-development.md) — Codespaces setup, local venv, Local Enhanced OCR one-time install, PostgreSQL round-trip testing, health commands.
+- [docs/local-development.md](docs/local-development.md) — Local venv, Local Enhanced OCR one-time install, PostgreSQL round-trip testing, health commands.
 - [docs/deployment.md](docs/deployment.md) — Modern `Deploy-ToAzure.ps1` path, manual steps, GitHub Actions, Kudu data uploads, full `RemoteDisconnected` recovery runbook, important App Settings.
-- [docs/codespaces-connection-recipe.md](docs/codespaces-connection-recipe.md) — Reliable agent connection recipe for the primary heavy-OCR Codespace (`slam-v2-44-codespaces-migration`).
 - [docs/proposed-state-alignment-process.md](docs/proposed-state-alignment-process.md) — Minimal template for the future proactive state-driven documentation/feature alignment system (logged as future work in Blueprint).
 
 All long-form historical narrative, architecture rationale, and detailed decision records live in the **Blueprint**.

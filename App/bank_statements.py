@@ -19,6 +19,43 @@ from typing import Any, Literal
 import pandas as pd
 from app_logging import log_event
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_REPO_ROOT / ".env")
+except ImportError:
+    pass
+
+try:
+    from hybrid_cv_check_leg import (
+        CheckLegMode,
+        azure_cv_configured,
+        cv_check_leg_available,
+        imaging_page_range,
+        is_hybrid_cv_enabled,
+        resolve_check_leg_mode,
+    )
+except Exception:
+    CheckLegMode = None  # type: ignore[assignment]
+
+    def is_hybrid_cv_enabled() -> bool:  # type: ignore[override]
+        return False
+
+    def azure_cv_configured() -> bool:  # type: ignore[override]
+        return False
+
+    def cv_check_leg_available() -> bool:  # type: ignore[override]
+        return False
+
+    def imaging_page_range(*, first_page=None, last_page=None):  # type: ignore[override]
+        _ = (first_page, last_page)
+        return 5, None
+
+    def resolve_check_leg_mode(_mode=None):  # type: ignore[override]
+        return "strict"
+
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "Scripts"
 
 UPLOAD_WORK_DIR = SCRIPTS_DIR / "_streamlit_bank_uploads"
@@ -37,13 +74,14 @@ CROPPER_SKIP_USER_MSG = (
 )
 
 ZERO_TRANSACTIONS_MSG = (
-    "No transactions were extracted from this PDF. The file may be a **scanned image** "
-    "(no text layer), or the statement layout may not match the parser yet."
+    "No transactions were extracted from this PDF. For **scanned/image-only** statements, "
+    "use **Prepare for Grok Vision** below (tabular text uses pdfplumber + EasyOCR on full "
+    "pages; check photos require Azure CV when auto-read is needed)."
 )
 
 GROK_VISION_HINT = (
-    "Try the **Grok Vision** skill: use **Export Raw Text** below (if any text was found), "
-    "or upload statement images to Grok to produce a transaction list, then paste into CSV format."
+    "Use **Prepare for Grok Vision** below: copy the prompt, attach the PDF (and any cropped "
+    "check images), then paste Grok's CSV into the section at the bottom of this page."
 )
 
 # CSV column order — must stay in sync with Scripts/bank-statement-parser.py CSV_FIELDNAMES
@@ -802,6 +840,82 @@ def cropper_available() -> tuple[bool, str]:
     return True, ""
 
 
+def run_check_cropper_only(
+    pdf_bytes: bytes,
+    filename: str,
+    logger,
+) -> tuple[list[str], dict[str, Any]]:
+    """Geometry check + deposit cropper — writes PNGs under ``CROPPED_CHECKS_DIR``.
+
+    Uses :mod:`check_cropper_v5` (OpenCV + pdf2image only; no EasyOCR). Azure DI reads
+    each crop afterward.
+    """
+
+    logs: list[str] = []
+    meta: dict[str, Any] = {
+        "cropper_skipped": False,
+        "cropper_user_message": None,
+        "cropped_dir": None,
+        "cropped_check_count": 0,
+        "pdf_path": None,
+        "cropper_mode": "geometry",
+    }
+
+    if not pdf_bytes:
+        meta["cropper_skipped"] = True
+        logs.append(_log("warn", "Empty PDF — check cropper skipped."))
+        return logs, meta
+
+    can_crop, crop_reason = cropper_available()
+    if not can_crop:
+        meta["cropper_skipped"] = True
+        meta["cropper_user_message"] = CROPPER_SKIP_USER_MSG
+        logs.append(_log("warn", f"Check cropper skipped: {crop_reason}."))
+        return logs, meta
+
+    logs.append(_log("info", "--- Check cropper (geometry: OpenCV, no EasyOCR) ---"))
+    CROPPED_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
+    for old_png in CROPPED_CHECKS_DIR.glob("*.png"):
+        try:
+            old_png.unlink()
+        except OSError:
+            pass
+
+    try:
+        from check_cropper_v5 import crop_pdf_checks
+
+        crop_list, crop_logs = crop_pdf_checks(pdf_bytes)
+        logs.extend(crop_logs)
+        saved = 0
+        for crop in crop_list:
+            check_id = str(crop.get("check_id") or "").strip()
+            b64 = crop.get("image_b64")
+            if not check_id or not b64:
+                continue
+            out_path = CROPPED_CHECKS_DIR / f"check_{check_id}.png"
+            out_path.write_bytes(base64.b64decode(b64))
+            saved += 1
+        meta["cropped_dir"] = CROPPED_CHECKS_DIR
+        meta["cropped_check_count"] = saved
+        meta["cropper_mode"] = "geometry_v5"
+        if saved:
+            logs.append(
+                _log("info", f"Cropped {saved} check/deposit image(s) to `{CROPPED_CHECKS_DIR}`.")
+            )
+        else:
+            meta["cropper_skipped"] = True
+            meta["cropper_user_message"] = CROPPER_SKIP_USER_MSG
+            logs.append(_log("warn", "Geometry cropper found no check/deposit regions."))
+        if logger is not None:
+            log_event(logger, "bank_stmt_cropper", mode="geometry_v5", count=saved)
+    except Exception as exc:
+        meta["cropper_skipped"] = True
+        meta["cropper_user_message"] = CROPPER_SKIP_USER_MSG
+        logs.append(_log("warn", f"Geometry cropper failed ({exc})."))
+
+    return logs, meta
+
+
 def _subprocess_env() -> dict[str, str]:
 
     env = os.environ.copy()
@@ -1350,6 +1464,7 @@ __all__ = [
     "extract_pdf_raw_text",
     "filter_transactions_by_confidence",
     "format_processing_log",
+    "hybrid_cv_status",
     "load_grok_vision_csv",
     "load_payee_rules",
     "local_enhanced_ocr_available",
@@ -1672,9 +1787,32 @@ AZURE_OCR_FUNCTION_KEY_ENV = "AZURE_OCR_FUNCTION_KEY"
 AZURE_OCR_TIMEOUT_SEC = 180
 
 
-def azure_ocr_configured() -> bool:
-    """Return True when both the Function URL and key env vars are set."""
+def _looks_like_document_intelligence_url(url: str) -> bool:
+    u = (url or "").lower()
+    return "cognitiveservices.azure.com" in u
 
+
+def _resolve_document_intelligence_credentials() -> tuple[str, str]:
+    """Endpoint + key for direct Azure Document Intelligence (incl. OCR_* aliases)."""
+
+    di_ep = (os.environ.get("AZURE_DI_ENDPOINT") or "").strip().rstrip("/")
+    di_key = (os.environ.get("AZURE_DI_KEY") or "").strip()
+    if di_ep and di_key:
+        return di_ep, di_key
+
+    fn_url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip().rstrip("/")
+    fn_key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    if fn_url and fn_key and _looks_like_document_intelligence_url(fn_url):
+        return fn_url, fn_key
+    return "", ""
+
+
+def azure_ocr_configured() -> bool:
+    """Return True when Azure OCR Function or Document Intelligence credentials are set."""
+
+    di_ep, di_key = _resolve_document_intelligence_credentials()
+    if di_ep and di_key:
+        return True
     url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
     key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
     return bool(url) and bool(key)
@@ -1683,20 +1821,37 @@ def azure_ocr_configured() -> bool:
 def azure_ocr_status() -> dict[str, Any]:
     """Snapshot for the sidebar status indicator (no network call).
 
-    Returns ``{configured, url, has_key, hint}`` so the sidebar can render
-    "Azure OCR · configured" vs. "Azure OCR · not configured (set
-    `AZURE_OCR_FUNCTION_URL` + `AZURE_OCR_FUNCTION_KEY`)".
+    Returns ``{configured, url, has_key, mode, hint}`` for the Bank Statements UI.
     """
 
-    url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
-    key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    di_ep, di_key = _resolve_document_intelligence_credentials()
+    fn_url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
+    fn_key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    if di_ep and di_key:
+        configured = True
+        mode = "document_intelligence"
+        display_url = di_ep
+        has_key = bool(di_key)
+    elif fn_url and fn_key:
+        configured = True
+        mode = "function"
+        display_url = fn_url
+        has_key = True
+    else:
+        configured = False
+        mode = ""
+        display_url = fn_url or di_ep
+        has_key = bool(fn_key or di_key)
+
     return {
-        "configured": bool(url) and bool(key),
-        "url": url,
-        "has_key": bool(key),
+        "configured": configured,
+        "url": display_url,
+        "has_key": has_key,
+        "mode": mode,
         "hint": (
-            f"Set `{AZURE_OCR_FUNCTION_URL_ENV}` and `{AZURE_OCR_FUNCTION_KEY_ENV}` "
-            "App Settings on the Streamlit App Service to enable the heavy-OCR path."
+            f"Set `{AZURE_OCR_FUNCTION_URL_ENV}` + `{AZURE_OCR_FUNCTION_KEY_ENV}` "
+            "(Azure Function), or `AZURE_DI_ENDPOINT` + `AZURE_DI_KEY` "
+            "(Document Intelligence resource), in `.env` or App Settings."
         ),
     }
 
@@ -1756,6 +1911,312 @@ def _parse_ocr_response_to_df(payload: dict[str, Any]) -> pd.DataFrame:
     return df[list(GROK_CSV_COLUMNS) + extras].reset_index(drop=True)
 
 
+def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop obvious duplicates when register rows and check-derived rows overlap."""
+
+    if df is None or df.empty:
+        return df
+    work = df.copy()
+    if "Check#" in work.columns:
+        work["_chk"] = work["Check#"].astype(str).str.strip()
+        has_chk = work["_chk"] != ""
+        with_chk = work[has_chk].drop_duplicates(subset=["_chk", "SignedAmount"], keep="first")
+        without_chk = work[~has_chk]
+        work = pd.concat([with_chk, without_chk], ignore_index=True)
+        work = work.drop(columns=["_chk"], errors="ignore")
+    return work.reset_index(drop=True)
+
+
+def _merge_azure_checks_into_transactions(
+    df: pd.DataFrame,
+    checks: list[dict[str, Any]],
+) -> tuple[pd.DataFrame, int]:
+    """Match Azure ``prebuilt-check.us`` rows to transactions by check number."""
+
+    if df is None or df.empty or not checks:
+        return df, 0
+
+    by_number: dict[str, dict[str, Any]] = {}
+    for check in checks:
+        num = str(check.get("check_number") or "").strip()
+        if num:
+            by_number[num] = check
+
+    merged = 0
+    if "Check#" not in df.columns:
+        return df, 0
+
+    for idx, row in df.iterrows():
+        cnum = str(row.get("Check#") or "").strip()
+        if not cnum or cnum not in by_number:
+            continue
+        payee = str(by_number[cnum].get("pay_to") or "").strip()
+        if not payee:
+            continue
+        current = str(row.get("Payee") or "").strip()
+        if current and current.lower() not in ("", "uncategorized"):
+            continue
+        df.at[idx, "Payee"] = payee
+        merged += 1
+
+    return df, merged
+
+
+def _run_azure_ocr_via_document_intelligence(
+    pdf_bytes: bytes,
+    pdf_filename: str,
+    client_name: str,
+    logger,
+    *,
+    endpoint: str,
+    key: str,
+) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
+    """Direct Azure Document Intelligence path (prebuilt bank statement model)."""
+
+    from azure_document_intelligence import (
+        analyze_bank_statement_pdf,
+        analyze_checks_on_imaging_pages,
+        checks_to_transaction_rows,
+        imaging_pages_string,
+        register_pages_string_for_bank_statement,
+    )
+
+    logs: list[str] = []
+    meta: dict[str, Any] = {
+        "status": "error",
+        "transaction_count": 0,
+        "grok_totals": None,
+        "request_id": None,
+        "service_version": None,
+        "message": "",
+        "configured": True,
+        "csv_path": None,
+        "pdf_path": None,
+        "engine": "azure_document_intelligence",
+        "endpoint": endpoint,
+    }
+
+    meta["cropper_skipped"] = False
+    meta["cropper_user_message"] = None
+    meta["cropped_dir"] = None
+    meta["cropped_check_count"] = 0
+    meta["azure_check_count"] = 0
+    meta["azure_check_payees_merged"] = 0
+    meta["check_source"] = ""
+
+    prev_ep = os.environ.get("AZURE_DI_ENDPOINT")
+    prev_key = os.environ.get("AZURE_DI_KEY")
+    os.environ["AZURE_DI_ENDPOINT"] = endpoint
+    os.environ["AZURE_DI_KEY"] = key
+    try:
+        pages_str, summary, _decisions = register_pages_string_for_bank_statement(pdf_bytes)
+        filter_msg = str(summary.get("user_message") or "")
+        logs.append(_log("info", filter_msg or "Azure DI page routing complete."))
+        register_txns: list[dict[str, str]] = []
+        di_meta: dict[str, Any] = {}
+        if pages_str:
+            logs.append(
+                _log(
+                    "info",
+                    f"Bank-statement model on register pages {pages_str} "
+                    f"({pdf_filename or 'statement.pdf'})...",
+                )
+            )
+            register_txns, di_meta = analyze_bank_statement_pdf(
+                pdf_bytes,
+                pages_str,
+                logger=logger,
+                log_event=log_event,
+            )
+            logs.append(
+                _log("info", f"Register pass: {len(register_txns)} transaction(s) from Azure DI.")
+            )
+        else:
+            logs.append(
+                _log(
+                    "warn",
+                    "No register pages for bank-statement model after excluding check-image pages.",
+                )
+            )
+
+        crop_logs, crop_meta = run_check_cropper_only(
+            pdf_bytes,
+            pdf_filename,
+            logger,
+        )
+        logs.extend(crop_logs)
+        meta["cropper_skipped"] = crop_meta.get("cropper_skipped", True)
+        meta["cropper_user_message"] = crop_meta.get("cropper_user_message")
+        meta["cropped_dir"] = crop_meta.get("cropped_dir")
+        meta["cropped_check_count"] = int(crop_meta.get("cropped_check_count") or 0)
+        meta["cropper_mode"] = crop_meta.get("cropper_mode")
+
+        check_pages = imaging_pages_string()
+        checks: list[dict[str, Any]] = []
+        check_meta: dict[str, Any] = {}
+        check_engine = "document_intelligence"
+        cropped_n = int(meta.get("cropped_check_count") or 0)
+        try:
+            from azure_content_understanding import (
+                analyze_checks_on_imaging_pages as cu_analyze_checks_on_imaging_pages,
+            )
+            from azure_content_understanding import (
+                content_understanding_configured,
+                content_understanding_status,
+            )
+            from azure_document_intelligence import analyze_checks_from_crop_directory
+
+            if cropped_n > 0 and meta.get("cropped_dir"):
+                logs.append(
+                    _log(
+                        "info",
+                        f"Azure check model on {cropped_n} cropped PNG(s) "
+                        f"(`prebuilt-check.us`)…",
+                    )
+                )
+                checks, check_meta = analyze_checks_from_crop_directory(
+                    meta["cropped_dir"],
+                    logger=logger,
+                    log_event=log_event,
+                )
+                check_engine = "document_intelligence_crops"
+                meta["check_source"] = "geometry_cropper_plus_di"
+            elif content_understanding_configured():
+                check_engine = "content_understanding"
+                logs.append(
+                    _log(
+                        "info",
+                        f"Content Understanding (`prebuilt-check.us`) — one call per imaging "
+                        f"page ({check_pages})…",
+                    )
+                )
+                checks, check_meta = cu_analyze_checks_on_imaging_pages(
+                    pdf_bytes,
+                    logger=logger,
+                    log_event=log_event,
+                )
+            else:
+                from azure_document_intelligence import azure_check_reader_status
+
+                check_status = azure_check_reader_status()
+                reader_host = ""
+                if check_status.get("endpoint"):
+                    try:
+                        reader_host = check_status["endpoint"].split("/")[2]
+                    except IndexError:
+                        reader_host = check_status["endpoint"]
+                reader_note = (
+                    f" (resource: {reader_host})"
+                    if check_status.get("dedicated_resource") and reader_host
+                    else ""
+                )
+                cu_hint = content_understanding_status().get("hint") or ""
+                cu_note = ""
+                if cu_hint and not check_status.get("dedicated_resource"):
+                    cu_note = (
+                        " For Foundry Content Understanding, set CONTENTUNDERSTANDING_* "
+                        "to a *.services.ai.azure.com endpoint."
+                    )
+                logs.append(
+                    _log(
+                        "info",
+                        f"Document Intelligence check model — one call per imaging page "
+                        f"({check_pages}){reader_note}.{cu_note}",
+                    )
+                )
+                checks, check_meta = analyze_checks_on_imaging_pages(
+                    pdf_bytes,
+                    logger=logger,
+                    log_event=log_event,
+                )
+                if not meta.get("check_source"):
+                    meta["check_source"] = "full_pdf_pages"
+            logs.append(
+                _log(
+                    "info",
+                    f"Check pass ({check_engine}): {len(checks)} check(s) from imaging pages "
+                    f"{check_pages}.",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logs.append(_log("warn", f"Azure check analyzer skipped: {exc}"))
+
+        check_txns = checks_to_transaction_rows(checks)
+        combined = register_txns + check_txns
+        df = _parse_ocr_response_to_df({"transactions": combined})
+        df = _dedupe_azure_transactions(df)
+        meta["transaction_count"] = int(len(df))
+        meta["azure_di_meta"] = di_meta
+        meta["pages_analyzed"] = pages_str
+        duration = di_meta.get("duration_sec")
+        if df.empty:
+            meta["status"] = "partial"
+            meta["message"] = ZERO_TRANSACTIONS_MSG
+            logs.append(_log("warn", f"Azure DI returned zero transactions ({duration}s)."))
+        else:
+            meta["status"] = "success" if len(df) >= 3 else "partial"
+            meta["message"] = (
+                f"Azure Document Intelligence: {len(df)} transaction(s) in {duration}s."
+            )
+            logs.append(_log("ok", meta["message"]))
+        for w in di_meta.get("warnings") or []:
+            logs.append(_log("warn", f"Azure DI warning: {w}"))
+        for w in check_meta.get("warnings") or []:
+            logs.append(_log("warn", f"Azure check warning: {w}"))
+
+        meta["azure_check_meta"] = check_meta
+        meta["azure_check_engine"] = check_meta.get("engine") or check_engine
+        meta["azure_check_count"] = len(checks)
+        meta["azure_checks"] = checks
+        meta["register_transaction_count"] = len(register_txns)
+        meta["check_transaction_count"] = len(check_txns)
+        meta["pages_analyzed"] = pages_str or check_pages
+        merged = 0
+        if checks:
+            df, merged = _merge_azure_checks_into_transactions(df, checks)
+            meta["azure_check_payees_merged"] = merged
+        logs.append(
+            _log(
+                "ok",
+                f"Combined {len(df)} transaction row(s): {len(register_txns)} register + "
+                f"{len(check_txns)} from checks; payee merge on {merged} row(s).",
+            )
+        )
+
+        if logger is not None:
+            log_event(
+                logger,
+                "bank_stmt_azure_di_pipeline_done",
+                client=client_name,
+                filename=pdf_filename,
+                rows=int(len(df)),
+                pages=pages_str,
+                azure_checks=int(meta.get("azure_check_count") or 0),
+            )
+        return df, logs, meta
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Azure Document Intelligence failed: {exc}"
+        logs.append(_log("error", msg))
+        meta["message"] = str(exc)[:500]
+        if logger is not None:
+            log_event(
+                logger,
+                "bank_stmt_azure_di_pipeline_error",
+                client=client_name,
+                error=str(exc)[:200],
+            )
+        return None, logs, meta
+    finally:
+        if prev_ep is None:
+            os.environ.pop("AZURE_DI_ENDPOINT", None)
+        else:
+            os.environ["AZURE_DI_ENDPOINT"] = prev_ep
+        if prev_key is None:
+            os.environ.pop("AZURE_DI_KEY", None)
+        else:
+            os.environ["AZURE_DI_KEY"] = prev_key
+
+
 def run_azure_ocr_pipeline(
     pdf_bytes: bytes,
     pdf_filename: str,
@@ -1764,7 +2225,7 @@ def run_azure_ocr_pipeline(
     *,
     timeout_sec: int = AZURE_OCR_TIMEOUT_SEC,
 ) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
-    """Call the Azure OCR Function and return ``(df, logs, meta)``.
+    """Call Azure Document Intelligence or the Azure OCR Function and return ``(df, logs, meta)``.
 
     Behavior mirrors :func:`run_statement_pipeline` so the Bank Statements page
     can swap implementations on a single radio toggle:
@@ -1795,17 +2256,35 @@ def run_azure_ocr_pipeline(
         "pdf_path": None,
     }
 
+    di_ep, di_key = _resolve_document_intelligence_credentials()
     url = (os.environ.get(AZURE_OCR_FUNCTION_URL_ENV) or "").strip()
     key = (os.environ.get(AZURE_OCR_FUNCTION_KEY_ENV) or "").strip()
+    if di_ep and di_key:
+        meta["configured"] = True
+        if not pdf_bytes:
+            logs.append(
+                _log("error", "Empty PDF payload — nothing to send to Azure Document Intelligence.")
+            )
+            meta["message"] = "Empty PDF payload."
+            return None, logs, meta
+        return _run_azure_ocr_via_document_intelligence(
+            pdf_bytes,
+            pdf_filename,
+            client_name,
+            logger,
+            endpoint=di_ep,
+            key=di_key,
+        )
+
     if not url or not key:
         logs.append(
             _log(
                 "warn",
                 "Azure OCR not configured — set `AZURE_OCR_FUNCTION_URL` + "
-                "`AZURE_OCR_FUNCTION_KEY` App Settings to enable the heavy-OCR path.",
+                "`AZURE_OCR_FUNCTION_KEY`, or `AZURE_DI_ENDPOINT` + `AZURE_DI_KEY`.",
             )
         )
-        meta["message"] = "Azure OCR Function URL/key not configured."
+        meta["message"] = "Azure OCR / Document Intelligence URL and key not configured."
         if logger is not None:
             log_event(logger, "bank_stmt_azure_ocr_not_configured", client=client_name)
         return None, logs, meta
@@ -2007,6 +2486,8 @@ def run_local_enhanced_ocr_pipeline(
     pdf_filename: str,
     client_name: str,
     logger,
+    *,
+    check_leg_mode: str | None = None,
 ) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
     """Run the v2.44.3 OCR pipeline locally (no Azure Function call).
 
@@ -2045,6 +2526,13 @@ def run_local_enhanced_ocr_pipeline(
         "missing_capabilities": [],
         "csv_path": None,
         "pdf_path": None,
+        "check_leg_mode_requested": str(check_leg_mode or "strict"),
+        "check_leg_mode_resolved": "strict",
+        "hybrid_cv_requested": False,
+        "hybrid_cv_used": False,
+        "hybrid_cv_ready": False,
+        "cv_crops_enriched": 0,
+        "cv_payees_in_final_table": 0,
     }
 
     available, caps, missing = local_enhanced_ocr_available()
@@ -2088,6 +2576,28 @@ def run_local_enhanced_ocr_pipeline(
             )
         )
 
+    # Auto-prefer hybrid when CV creds or cache are available (Sprint 3.3).
+    resolved_mode_obj = resolve_check_leg_mode(check_leg_mode)
+    resolved_mode = (
+        resolved_mode_obj.value
+        if hasattr(resolved_mode_obj, "value")
+        else str(resolved_mode_obj or "strict")
+    )
+    hybrid_requested = str(check_leg_mode or "").strip().lower() in {"", "hybrid_cv", "auto"}
+    hybrid_ready = bool(cv_check_leg_available())
+    if hybrid_requested and resolved_mode != "hybrid_cv" and hybrid_ready is False:
+        logs.append(
+            _log(
+                "info",
+                "CV check leg unavailable (no AZURE_CV_* creds or SLAM_CV_CACHE_DIR); "
+                "check images were cropped but not auto-read.",
+            )
+        )
+    meta["check_leg_mode_resolved"] = resolved_mode
+    meta["hybrid_cv_requested"] = hybrid_requested
+    meta["hybrid_cv_ready"] = hybrid_ready
+    meta["hybrid_cv_used"] = resolved_mode == "hybrid_cv"
+
     logs.append(
         _log(
             "info",
@@ -2103,12 +2613,20 @@ def run_local_enhanced_ocr_pipeline(
             client=client_name,
             filename=pdf_filename,
             bytes=len(pdf_bytes),
+            check_leg_mode_requested=meta["check_leg_mode_requested"],
+            check_leg_mode_resolved=resolved_mode,
+            hybrid_cv_requested=hybrid_requested,
+            hybrid_cv_used=meta["hybrid_cv_used"],
         )
 
     try:
         import local_enhanced_ocr  # noqa: PLC0415
 
-        result = local_enhanced_ocr.run_pipeline(pdf_bytes)
+        result = local_enhanced_ocr.run_pipeline(
+            pdf_bytes,
+            check_leg_mode=resolved_mode,
+            client_name=client_name,
+        )
     except Exception as exc:  # noqa: BLE001 — function boundary; never crash UI
         logs.append(_log("error", f"Local Enhanced OCR pipeline crashed: {exc}"))
         meta["message"] = f"Local Enhanced OCR pipeline crashed: {exc}"
@@ -2125,6 +2643,34 @@ def run_local_enhanced_ocr_pipeline(
     meta["grok_totals"] = result.get("grok_totals")
     meta["cropped_checks"] = result.get("cropped_checks") or []
     meta["linked_count"] = int(result.get("linked_count") or 0)
+    meta["check_leg_mode_resolved"] = str(
+        result.get("check_leg_mode_resolved") or meta["check_leg_mode_resolved"]
+    )
+    meta["hybrid_cv_used"] = bool(result.get("hybrid_cv_used", meta["hybrid_cv_used"]))
+    meta["cv_crops_enriched"] = int(
+        result.get("cv_crops_enriched")
+        or sum(
+            1
+            for crop in meta["cropped_checks"]
+            if str(crop.get("notes", "")).startswith("G1 hybrid CV")
+        )
+    )
+    meta["cv_payees_in_final_table"] = int(result.get("cv_payees_in_final_table") or 0)
+    if meta["hybrid_cv_used"] and meta["cv_crops_enriched"] > 0:
+        logs.append(
+            _log(
+                "info",
+                f"CV round-trip: {meta['cv_crops_enriched']} crop(s) enriched, "
+                f"{meta['cv_payees_in_final_table']} payee(s) used in the final table.",
+            )
+        )
+    if meta["hybrid_cv_used"] and meta["cv_crops_enriched"] <= 0:
+        logs.append(
+            _log(
+                "warn",
+                "Hybrid mode resolved but no CV-enriched crops detected; strict-style output preserved.",
+            )
+        )
 
     df = _txn_list_to_df(result.get("transactions") or [])
     meta["transaction_count"] = int(len(df))
@@ -2150,6 +2696,10 @@ def run_local_enhanced_ocr_pipeline(
             rows=int(len(df)),
             cropped=int(len(meta["cropped_checks"])),
             linked=meta["linked_count"],
+            check_leg_mode=meta["check_leg_mode_resolved"],
+            hybrid_cv_used=meta["hybrid_cv_used"],
+            cv_crops_enriched=meta["cv_crops_enriched"],
+            cv_payees_in_final_table=meta["cv_payees_in_final_table"],
             status=meta["status"],
             service_version=str(meta["service_version"] or ""),
         )
@@ -2190,6 +2740,66 @@ def _txn_list_to_df(transactions: list[dict]) -> pd.DataFrame:
 
     extras = [c for c in df.columns if c not in GROK_CSV_COLUMNS]
     return df[list(GROK_CSV_COLUMNS) + extras].reset_index(drop=True)
+
+
+def hybrid_cv_status() -> dict[str, Any]:
+    """Read-only status for the Azure bank-statement pipeline (DI register + check leg)."""
+
+    di_ep, di_key = _resolve_document_intelligence_credentials()
+    def _cu_configured() -> bool:
+        try:
+            from azure_content_understanding import content_understanding_configured
+
+            return content_understanding_configured()
+        except ImportError:
+            return False
+
+    try:
+        from azure_document_intelligence import imaging_pages_string
+
+        check_pages = imaging_pages_string()
+    except Exception:
+        check_pages = "5-9"
+
+    first_page, last_page = imaging_page_range()
+    cu_ready = _cu_configured()
+    check_leg = "content_understanding" if cu_ready else "document_intelligence"
+    dedicated_check = False
+    try:
+        from azure_document_intelligence import azure_check_reader_status
+
+        dedicated_check = bool(azure_check_reader_status().get("dedicated_resource"))
+    except Exception:
+        pass
+    return {
+        "available": bool(di_ep and di_key),
+        "cv_configured": bool(di_ep and di_key),
+        "ready": bool(di_ep and di_key),
+        "enabled": True,
+        "cv_placeholder": False,
+        "cv_cache_dir": False,
+        "imaging_first_page": int(first_page),
+        "imaging_last_page": int(last_page) if isinstance(last_page, int) else None,
+        "check_pages": check_pages,
+        "di_endpoint": di_ep,
+        "check_model": "prebuilt-check.us",
+        "check_leg": check_leg,
+        "dedicated_check_reader": dedicated_check,
+        "content_understanding_ready": cu_ready,
+        "statement_model": "prebuilt-bankStatement.us",
+        "hint": (
+            "Set AZURE_DI_ENDPOINT + AZURE_DI_KEY from resource `slam-bank-statements` "
+            "(register/tabular). For check-image pages, set CONTENTUNDERSTANDING_ENDPOINT "
+            "+ CONTENTUNDERSTANDING_KEY (Foundry Content Understanding)."
+            if not (di_ep and di_key)
+            else (
+                "Check imaging uses Document Intelligence until Content Understanding is "
+                "configured (CONTENTUNDERSTANDING_* in .env)."
+                if not cu_ready
+                else ""
+            )
+        ),
+    }
 
 
 def missing_document_counts(req_df: pd.DataFrame) -> dict[str, int]:

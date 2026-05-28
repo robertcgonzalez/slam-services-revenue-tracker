@@ -25,3 +25,5 @@ easyocr>=1.7.0
 pillow>=10.0.0
 opencv-python-headless>=4.8.0
 numpy>=1.26.0
+# Optional at runtime — hybrid CV check leg (G1 Sprint 3.4); skipped when unset or App/ absent
+azure-cognitiveservices-vision-computervision>=0.9.0

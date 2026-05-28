@@ -9,13 +9,18 @@
     }
   },
   "ruff.enable": true,
+  "ruff.nativeServer": "on",
   "ruff.organizeImports": true,
   "ruff.fixAll": true,
   "ruff.lineLength": 100,
   "black-formatter.showNotifications": "off",
+  "black-formatter.importStrategy": "fromEnvironment",
 
   // Python 3.10 — matches Azure runtime.txt (python-3.10)
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  // No hardcoded interpreter path: .venv layout differs on Windows (Scripts/) vs Linux (bin/).
+  // The extension discovers ${workspaceFolder}/.venv on all platforms.
+  "python.venvPath": "${workspaceFolder}",
+  "python.venvFolders": [".venv"],
   "python.analysis.typeCheckingMode": "basic",
   "python.analysis.extraPaths": ["${workspaceFolder}", "${workspaceFolder}/App"],
   "python.terminal.activateEnvironment": true,
@@ -99,6 +104,8 @@
 
   // Azure
   "azureResourceGroups.showTags": true,
+
+  // Cursor Pyright (desktop Cursor)
   "cursorpyright.analysis.extraPaths": [
     "${workspaceFolder}",
     "${workspaceFolder}/App"

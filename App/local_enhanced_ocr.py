@@ -7,9 +7,9 @@ for Robert while the Azure Function deploy remains parked on a Y1
 Consumption infra decision (see Blueprint v2.43.1 Change Log).
 
 The HTTP plumbing and `azure.functions` dependency are stripped. The actual
-OCR stages (pdfplumber → easyocr fallback → opencv check cropping → check ↔
-transaction matcher) and the canonical 12-column transaction shape are kept
-byte-identical to the Function so v2.44.3 output drops straight into the same
+OCR stages (pdfplumber → EasyOCR tabular fallback → geometry check cropping →
+Azure CV Read on crops when configured → check ↔ transaction matcher) and the
+canonical 12-column transaction shape drop straight into the same
 review UI, payee rules engine, reconciliation banner, and Power Query /
 Process-Statement.ps1 downstream workflow.
 
@@ -25,7 +25,8 @@ Public surface:
 - :func:`detect_capabilities` — which optional libs are importable
 - :func:`run_pipeline` — main entry; returns the same dict shape as the
   Function's ``_run_ocr_pipeline`` (``status``, ``transactions``,
-  ``grok_totals``, ``cropped_checks``, ``logs``, ``message``)
+  ``grok_totals``, ``cropped_checks``, ``logs``, ``message``). Optional
+  ``check_leg_mode`` (auto ``hybrid_cv`` when Azure CV creds/cache exist; never EasyOCR on crops).
 """
 
 from __future__ import annotations
@@ -42,40 +43,11 @@ from typing import Any
 LOCAL_ENHANCED_OCR_VERSION = "v2.44.3"
 
 
-def _is_codespaces() -> bool:
-    """True when running inside a GitHub Codespace.
-
-    Codespaces sets the ``CODESPACES=true`` environment variable
-    automatically on every machine in the Codespaces fleet (also
-    populated for `gh cs ssh` sessions). We use this to pick safer
-    DPI / page / check-count defaults so the heavy OCR pipeline fits
-    comfortably on the standard 4-core / 8 GB SKU without swapping.
-    """
-
-    return os.environ.get("CODESPACES", "").strip().lower() == "true"
-
-
-# Default DPIs differ between the primary mirroring environment
-# (GitHub Codespace `slam-v2.44-codespaces-migration`, which replicates
-# the laptop setup) and a Codespaces container (resource-aware 200/180).
-# Either default is overridable per-run via the SLAM_LOCAL_OCR_* env vars
-# below — devcontainer.json sets the Codespaces values explicitly, but if
-# the env vars are unset and we still detect Codespaces, fall back to the
-# safer defaults so scripted runs are well-behaved.
-_RUNTIME_IS_CODESPACES = _is_codespaces()
-_DEFAULT_DPI_TEXT = "200" if _RUNTIME_IS_CODESPACES else "300"
-# v2.44.3: bumped DPI_CROP from 180 → 220 in Codespaces. At 180 the OpenCV
-# contour finder produced ZERO check-rectangle candidates on the Auto Body
-# Center Jan-26 scanned PDF (verified live in slam-v2.44-codespaces-migration);
-# at 220 the same pass returns 50+ candidates, matching the laptop's
-# behaviour. The ~1.5x memory cost per rasterized page is well worth the
-# matcher actually being exercised.
-_DEFAULT_DPI_CROP = "220" if _RUNTIME_IS_CODESPACES else "250"
-_DEFAULT_MAX_PAGES_RASTER = "20" if _RUNTIME_IS_CODESPACES else "30"
-# v2.44.3: cap raised 30 → 50 in Codespaces so the cropper can reach all 49
-# check images on a typical Traditions Bank monthly statement without
-# truncating mid-page.
-_DEFAULT_MAX_CHECKS = "50" if _RUNTIME_IS_CODESPACES else "40"
+# Local Windows defaults — override per-run via SLAM_LOCAL_OCR_* env vars.
+_DEFAULT_DPI_TEXT = "300"
+_DEFAULT_DPI_CROP = "400"
+_DEFAULT_MAX_PAGES_RASTER = "30"
+_DEFAULT_MAX_CHECKS = "70"
 
 # Canonical 12-column order — must match GROK_CSV_COLUMNS in bank_statements.py
 # so the response drops straight into the existing review UI.
@@ -95,9 +67,7 @@ TRANSACTION_FIELDS: tuple[str, ...] = (
 )
 
 # Pipeline tunables — kept aligned with the Function so behavior is identical
-# on Robert's local Windows. In Codespaces we lower the defaults (see
-# ``_DEFAULT_DPI_*`` above) so the heavy raster + EasyOCR stack fits in 8 GB
-# RAM on the standard Codespaces SKU.
+# on Robert's local Windows.
 OCR_DPI_TEXT = int(os.environ.get("SLAM_LOCAL_OCR_DPI_TEXT", _DEFAULT_DPI_TEXT))
 OCR_DPI_CROP = int(os.environ.get("SLAM_LOCAL_OCR_DPI_CROP", _DEFAULT_DPI_CROP))
 OCR_MAX_PAGES_RASTER = int(
@@ -130,8 +100,6 @@ def environment_summary() -> dict[str, Any]:
     DPI / page / check-count tunables without running the pipeline.
 
     Keys:
-        ``codespaces``         True when ``CODESPACES=true`` is set.
-        ``codespace_name``     Codespaces machine name when available.
         ``dpi_text``           Active raster DPI for the EasyOCR fallback.
         ``dpi_crop``           Active raster DPI for the OpenCV cropper.
         ``max_pages_raster``   Cap on raster fallback pages per PDF.
@@ -140,8 +108,6 @@ def environment_summary() -> dict[str, Any]:
     """
 
     return {
-        "codespaces": _RUNTIME_IS_CODESPACES,
-        "codespace_name": os.environ.get("CODESPACE_NAME", "") or None,
         "dpi_text": OCR_DPI_TEXT,
         "dpi_crop": OCR_DPI_CROP,
         "max_pages_raster": OCR_MAX_PAGES_RASTER,
@@ -153,45 +119,19 @@ def environment_summary() -> dict[str, Any]:
 def _build_startup_logs() -> list[str]:
     """One-line startup banner for the Processing log expander.
 
-    Surfaces the active DPI / page / check-count tunables on every run
-    so Robert can immediately tell whether he's running with Codespaces-
-    safe defaults or his Windows-local high-fidelity defaults — and so
-    a future reviewer can correlate "0 cropped checks" against the DPI
-    that was actually in effect.
+    Surfaces the active DPI / page / check-count tunables on every run so
+    a reviewer can correlate "0 cropped checks" against the DPI in effect.
     """
 
     summary = environment_summary()
-    logs: list[str] = []
-    if summary["codespaces"]:
-        cs_name = summary["codespace_name"]
-        suffix = f" ({cs_name})" if cs_name else ""
-        logs.append(
-            _log(
-                "info",
-                f"Local Enhanced OCR {LOCAL_ENHANCED_OCR_VERSION} starting in Codespaces{suffix}: "
-                f"DPI text={summary['dpi_text']} / crop={summary['dpi_crop']}, "
-                f"max pages={summary['max_pages_raster']}, max checks={summary['max_checks']}.",
-            )
+    return [
+        _log(
+            "info",
+            f"Local Enhanced OCR {LOCAL_ENHANCED_OCR_VERSION} starting: "
+            f"DPI text={summary['dpi_text']} / crop={summary['dpi_crop']}, "
+            f"max pages={summary['max_pages_raster']}, max checks={summary['max_checks']}.",
         )
-        logs.append(
-            _log(
-                "warn",
-                "Heavy OCR pipeline (easyocr+torch+opencv) can spike past 6 GB on multi-page "
-                "scanned PDFs. If your Codespace was provisioned with the 4-core / 8 GB SKU, "
-                "consider switching to the 4-core / 16 GB SKU (Codespaces -> Change machine "
-                "type) before running OCR on a >10-page statement.",
-            )
-        )
-    else:
-        logs.append(
-            _log(
-                "info",
-                f"Local Enhanced OCR {LOCAL_ENHANCED_OCR_VERSION} starting (local mode): "
-                f"DPI text={summary['dpi_text']} / crop={summary['dpi_crop']}, "
-                f"max pages={summary['max_pages_raster']}, max checks={summary['max_checks']}.",
-            )
-        )
-    return logs
+    ]
 
 
 def detect_capabilities() -> dict[str, bool]:
@@ -250,11 +190,133 @@ def detect_capabilities() -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
+# Tabular-only extraction (pdfplumber + full-page EasyOCR — no cropping / CV)
+# ---------------------------------------------------------------------------
+
+
+def run_tabular_extraction_only(pdf_bytes: bytes) -> dict[str, Any]:
+    """Extract transactions via pdfplumber and optional full-page EasyOCR fallback.
+
+    Stops before check cropping, hybrid CV, and check-to-transaction matching.
+    Used by the Phase 1 Bank Statements page.
+    """
+    pipeline_logs: list[str] = []
+    transactions: list[dict[str, Any]] = []
+    fast_path_rows = 0
+    fallback_rows = 0
+    default_year = datetime.utcnow().year
+    summary_override: dict[str, Any] = {}
+
+    try:
+        text_blob, tables, fast_logs, statement_year = _extract_pdfplumber(pdf_bytes)
+        pipeline_logs.extend(fast_logs)
+        default_year = statement_year or default_year
+
+        if text_blob.strip():
+            summary_override = _extract_statement_summary(text_blob) or summary_override
+            lines = [ln.strip() for ln in text_blob.splitlines() if ln.strip()]
+            line_rows = _parse_lines_to_transactions(lines, default_year)
+            table_rows = _parse_table_rows(tables, default_year) if tables else []
+            merged = _dedupe_transactions(line_rows + table_rows)
+            merged = _filter_balance_only_rows(merged)
+            transactions = merged
+            fast_path_rows = len(transactions)
+            pipeline_logs.append(
+                _log(
+                    "info",
+                    f"pdfplumber produced {fast_path_rows} transaction(s) "
+                    f"({len(line_rows)} from text, {len(table_rows)} from tables).",
+                )
+            )
+        else:
+            pipeline_logs.append(
+                _log("warn", "pdfplumber returned no text layer (likely scanned/image PDF).")
+            )
+    except ModuleNotFoundError as exc:
+        pipeline_logs.append(_log("warn", f"pdfplumber unavailable ({exc})."))
+    except Exception as exc:  # noqa: BLE001
+        pipeline_logs.append(_log("warn", f"pdfplumber failed: {exc}."))
+
+    if fast_path_rows < OCR_FAST_PATH_MIN_ROWS:
+        pipeline_logs.append(
+            _log(
+                "info",
+                f"Fast path returned {fast_path_rows} rows (< {OCR_FAST_PATH_MIN_ROWS}); "
+                f"running full-page EasyOCR at {OCR_DPI_TEXT} DPI.",
+            )
+        )
+        try:
+            ocr_lines, ocr_logs = _ocr_extract_lines(pdf_bytes)
+            pipeline_logs.extend(ocr_logs)
+            if ocr_lines:
+                ocr_summary = _extract_statement_summary(ocr_lines)
+                if ocr_summary:
+                    for key, value in ocr_summary.items():
+                        summary_override.setdefault(key, value)
+                fallback_txns = _parse_ocr_lines_to_transactions(ocr_lines, default_year)
+                fallback_txns = _filter_balance_only_rows(_dedupe_transactions(fallback_txns))
+                fallback_rows = len(fallback_txns)
+                pipeline_logs.append(
+                    _log("info", f"EasyOCR fallback produced {fallback_rows} transaction(s).")
+                )
+                transactions = _filter_balance_only_rows(
+                    _dedupe_transactions(transactions + fallback_txns)
+                )
+        except ModuleNotFoundError as exc:
+            pipeline_logs.append(
+                _log(
+                    "warn",
+                    f"EasyOCR unavailable ({exc}). Install pdf2image + easyocr + pillow.",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            pipeline_logs.append(_log("error", f"EasyOCR fallback failed: {exc}"))
+
+    canonical = [
+        {field: row.get(field, "") for field in TRANSACTION_FIELDS} for row in transactions
+    ]
+    row_count = len(canonical)
+
+    if row_count and (fast_path_rows >= OCR_FAST_PATH_MIN_ROWS or fallback_rows >= 1):
+        status = "success"
+        message = (
+            f"Extracted {row_count} transaction(s) "
+            f"(pdfplumber: {fast_path_rows}, EasyOCR: {fallback_rows})."
+        )
+    elif row_count:
+        status = "partial"
+        message = f"Extracted {row_count} transaction(s) — please review carefully."
+    else:
+        status = "error"
+        message = (
+            "No transactions extracted. The PDF may be scanned without OCR libraries "
+            "installed, or use an unsupported layout."
+        )
+
+    return {
+        "status": status,
+        "transactions": canonical,
+        "logs": pipeline_logs,
+        "message": message,
+        "fast_path_rows": fast_path_rows,
+        "fallback_rows": fallback_rows,
+        "transaction_count": row_count,
+        "summary_override": summary_override,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main orchestrator (ported from function_app._run_ocr_pipeline)
 # ---------------------------------------------------------------------------
 
 
-def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
+def run_pipeline(
+    pdf_bytes: bytes,
+    *,
+    check_leg_mode: str | None = None,
+    hybrid_cv_cache_dir: str | None = None,
+    client_name: str | None = None,
+) -> dict[str, Any]:
     """Run the full v2.43 OCR pipeline locally and return the structured result.
 
     Strategy:
@@ -263,18 +325,54 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
            via ``pdf2image`` + ``easyocr`` at ``OCR_DPI_TEXT``.
         3. Always attempt the OpenCV check cropper at ``OCR_DPI_CROP``;
            skip gracefully if cv2/PIL/pdf2image/easyocr aren't installed.
+        3b. When hybrid CV is available, Azure CV Read on imaging-page check crops
+           (Sprint 3.2/3.3); payee_extractor + check rules set clean payees on crops.
         4. v2.43 matcher — link each cropped check to its best-matching
-           transaction (Check# → amount → fuzzy payee) and enrich Payee from
-           the "Pay to the order of" line on the check image.
+           transaction; prefer hybrid CV+rules payees over legacy EasyOCR heuristics.
 
     Returns the same dict shape as the Function's ``_run_ocr_pipeline``:
     ``{status, transactions, grok_totals, cropped_checks, logs, message}``.
     """
-
     pipeline_logs: list[str] = list(_build_startup_logs())
+    resolved_leg_mode = "no_cv"
+    hybrid_cv_used = False
+    cv_crops_enriched = 0
+    cv_available = False
+
+    try:
+        try:
+            from .hybrid_cv_check_leg import (  # type: ignore[attr-defined]
+                CheckLegMode,
+                cv_check_leg_available,
+                resolve_check_leg_mode,
+            )
+        except ImportError:
+            from hybrid_cv_check_leg import (  # type: ignore[no-redef]
+                CheckLegMode,
+                cv_check_leg_available,
+                resolve_check_leg_mode,
+            )
+
+        cv_available = bool(cv_check_leg_available())
+        resolved = resolve_check_leg_mode(check_leg_mode)
+        resolved_leg_mode = resolved.value if hasattr(resolved, "value") else str(resolved)
+        use_hybrid = resolved is CheckLegMode.HYBRID_CV and cv_available
+    except ImportError:
+        resolved_leg_mode = "no_cv"
+        use_hybrid = False
+
+    if use_hybrid:
+        pipeline_logs.append(
+            _log(
+                "info",
+                "Azure CV Read is the sole check-image reader (imaging-page crops).",
+            )
+        )
+    register_page1_text = ""
     transactions: list[dict[str, Any]] = []
     cropped_checks: list[dict[str, Any]] = []
     detections_by_id: dict[str, list[Any]] = {}
+    cv_payees_in_final_table = 0
     fast_path_rows = 0
     fallback_rows = 0
     default_year = datetime.utcnow().year
@@ -290,6 +388,7 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
         default_year = statement_year or default_year
 
         if text_blob.strip():
+            register_page1_text = text_blob[:4000]
             summary_override = _extract_statement_summary(text_blob) or summary_override
             lines = [ln.strip() for ln in text_blob.splitlines() if ln.strip()]
             line_rows = _parse_lines_to_transactions(lines, default_year)
@@ -381,20 +480,73 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001 — never crash the request
             pipeline_logs.append(_log("error", f"EasyOCR fallback failed: {exc}"))
 
-    # 3) Check cropping (best-effort) ----------------------------------------
+    # 3) Check cropping (geometry only — no EasyOCR on crop images) ----------
     try:
-        cropped_checks, detections_by_id, crop_logs = _crop_checks(pdf_bytes)
+        cropped_checks, detections_by_id, crop_logs = _crop_checks(
+            pdf_bytes,
+            ocr_validation=False,
+        )
         pipeline_logs.extend(crop_logs)
     except ModuleNotFoundError as exc:
         pipeline_logs.append(
             _log(
                 "warn",
                 f"Check cropper unavailable ({exc}). Install opencv-python-headless + "
-                "pdf2image + easyocr + pillow to enable cropped-check images.",
+                "pdf2image + pillow to enable cropped-check images.",
             )
         )
     except Exception as exc:  # noqa: BLE001 — cropping is optional
         pipeline_logs.append(_log("warn", f"Check cropper failed: {exc}"))
+
+    # 3b) Azure CV Read — sole post-crop text reader when creds/cache exist.
+    if use_hybrid and cropped_checks:
+        hybrid_cv_used = True
+        try:
+            try:
+                from .hybrid_cv_check_leg import run_hybrid_check_leg  # type: ignore[attr-defined]
+            except ImportError:
+                from hybrid_cv_check_leg import run_hybrid_check_leg  # type: ignore[no-redef]
+
+            cropped_checks, detections_by_id, hybrid_logs = run_hybrid_check_leg(
+                cropped_checks,
+                detections_by_id,
+                register_page1_text=register_page1_text or None,
+                client_name=client_name,
+                cache_dir=hybrid_cv_cache_dir,
+            )
+            pipeline_logs.extend(hybrid_logs)
+            cv_crops_enriched = sum(
+                1
+                for crop in cropped_checks
+                if str(crop.get("notes", "")).startswith("G1 hybrid CV")
+            )
+            pipeline_logs.append(
+                _log("info", f"{cv_crops_enriched} crop(s) enriched via CV Read.")
+            )
+            pipeline_logs.append(
+                _log(
+                    "info",
+                    f"Hybrid CV results returned for {cv_crops_enriched} imaging-page crop(s); "
+                    "merging superior payees back into local table compilation.",
+                )
+            )
+        except ImportError as exc:
+            hybrid_cv_used = False
+            pipeline_logs.append(
+                _log("warn", f"Hybrid CV modules unavailable — skipping hybrid leg ({exc}).")
+            )
+        except Exception as exc:  # noqa: BLE001 — hybrid leg is best-effort
+            hybrid_cv_used = False
+            pipeline_logs.append(_log("warn", f"Hybrid CV check leg failed: {exc}"))
+    elif cropped_checks and not cv_available:
+        pipeline_logs.append(
+            _log(
+                "info",
+                "Image intelligence (payee extraction from checks) requires Azure CV "
+                "credentials or SLAM_CV_CACHE_DIR. Cropped images were produced but not "
+                "auto-read.",
+            )
+        )
 
     # 4) Canonicalize → 12-column shape
     canonical = [
@@ -403,10 +555,18 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
 
     # 5) v2.43 — link cropped checks to transactions + enrich Payee from image.
     try:
-        canonical, cropped_checks, match_logs = _match_checks_to_transactions(
-            canonical, cropped_checks, detections_by_id
+        canonical, cropped_checks, match_logs, cv_payees_in_final_table = (
+            _match_checks_to_transactions(canonical, cropped_checks, detections_by_id)
         )
         pipeline_logs.extend(match_logs)
+        if hybrid_cv_used and cv_crops_enriched:
+            pipeline_logs.append(
+                _log(
+                    "info",
+                    f"Round-trip merge complete: {cv_crops_enriched} CV-enriched crop(s), "
+                    f"{cv_payees_in_final_table} payee(s) applied in the final table.",
+                )
+            )
     except Exception as exc:  # noqa: BLE001 — matcher is best-effort
         pipeline_logs.append(_log("warn", f"Check-to-transaction matcher failed: {exc}"))
 
@@ -443,6 +603,10 @@ def run_pipeline(pdf_bytes: bytes) -> dict[str, Any]:
         "fast_path_rows": fast_path_rows,
         "fallback_rows": fallback_rows,
         "linked_count": linked_count,
+        "check_leg_mode_resolved": resolved_leg_mode,
+        "hybrid_cv_used": hybrid_cv_used,
+        "cv_crops_enriched": cv_crops_enriched,
+        "cv_payees_in_final_table": cv_payees_in_final_table,
     }
 
 
@@ -720,12 +884,12 @@ def _easyocr_to_lines(detections: list[Any], y_tolerance: float = 20.0) -> list[
 # ---------------------------------------------------------------------------
 
 
-_CROP_MIN_WIDTH = 100
-_CROP_MAX_WIDTH = 1500
-_CROP_MIN_HEIGHT = 320
-_CROP_MAX_HEIGHT = 900
+_CROP_MIN_WIDTH = 120
+_CROP_MAX_WIDTH = 1700
+_CROP_MIN_HEIGHT = 500
+_CROP_MAX_HEIGHT = 1100
 _CROP_MIN_ASPECT = 2.0
-_CROP_MAX_ASPECT = 3.2
+_CROP_MAX_ASPECT = 3.0
 _CROP_OCR_TEXT_THRESHOLD = 0.25
 _CROP_CONTRAST_FACTOR = 3.5
 _CROP_CHECK_KEYWORDS = ("pay to", "order of", "memo", "dollars")
@@ -739,8 +903,15 @@ _CROP_JUNK_KEYWORDS = (
 
 def _crop_checks(
     pdf_bytes: bytes,
+    *,
+    ocr_validation: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, list[Any]], list[str]]:
-    """Detect, crop, and validate check images. Returns (checks, detections_by_id, logs)."""
+    """Detect and crop check images (geometry). Returns (checks, detections_by_id, logs).
+
+  When ``ocr_validation`` is False (default for the automated pipeline), contours are
+  accepted on geometry/aspect only — **no EasyOCR** runs on crop images. Text for crops
+  is populated later solely via :func:`hybrid_cv_check_leg.run_hybrid_check_leg`.
+    """
 
     import cv2  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
@@ -756,8 +927,38 @@ def _crop_checks(
     if len(pages) > OCR_MAX_PAGES_RASTER:
         pages = pages[:OCR_MAX_PAGES_RASTER]
 
-    reader = _get_easyocr_reader()
-    logs.append(_log("info", f"Check cropper scanning {len(pages)} page(s) at {OCR_DPI_CROP} DPI."))
+    imaging_first = 1
+    imaging_last: int | None = None
+    if not ocr_validation:
+        try:
+            try:
+                from .hybrid_cv_check_leg import imaging_page_range  # type: ignore[attr-defined]
+            except ImportError:
+                from hybrid_cv_check_leg import imaging_page_range  # type: ignore[no-redef]
+
+            imaging_first, imaging_last = imaging_page_range()
+        except ImportError:
+            imaging_first, imaging_last = 5, None
+
+    reader = None
+    if ocr_validation:
+        reader = _get_easyocr_reader()
+        logs.append(
+            _log("info", f"Check cropper (OCR validation) scanning {len(pages)} page(s).")
+        )
+    else:
+        span = (
+            f"{imaging_first}-{imaging_last}"
+            if isinstance(imaging_last, int)
+            else f"{imaging_first}+"
+        )
+        logs.append(
+            _log(
+                "info",
+                f"Check cropper (geometry only, pages {span}) scanning {len(pages)} page(s) "
+                f"at {OCR_DPI_CROP} DPI.",
+            )
+        )
 
     seen_hashes: set[str] = set()
     checks: list[dict[str, Any]] = []
@@ -768,6 +969,13 @@ def _crop_checks(
         if len(checks) >= OCR_MAX_CHECKS:
             logs.append(_log("warn", f"Hit OCR_MAX_CHECKS={OCR_MAX_CHECKS}; stopping cropper."))
             break
+
+        page_num = page_idx + 1
+        if not ocr_validation:
+            if page_num < imaging_first:
+                continue
+            if imaging_last is not None and page_num > imaging_last:
+                continue
 
         img = np.array(page)
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -809,22 +1017,27 @@ def _crop_checks(
                 )
                 enhanced_np = np.array(enhanced)
 
-                try:
-                    detections = reader.readtext(
-                        enhanced_np,
-                        detail=1,
-                        paragraph=False,
-                        text_threshold=_CROP_OCR_TEXT_THRESHOLD,
-                    )
-                except Exception:
-                    continue
-                text_tokens = [str(d[1]) for d in detections if len(d) >= 2 and d[1]]
-                full_text = " ".join(text_tokens).lower()
+                detections: list[Any] = []
+                if ocr_validation and reader is not None:
+                    try:
+                        detections = reader.readtext(
+                            enhanced_np,
+                            detail=1,
+                            paragraph=False,
+                            text_threshold=_CROP_OCR_TEXT_THRESHOLD,
+                        )
+                    except Exception:
+                        continue
+                    text_tokens = [str(d[1]) for d in detections if len(d) >= 2 and d[1]]
+                    full_text = " ".join(text_tokens).lower()
 
-                if any(kw in full_text for kw in _CROP_JUNK_KEYWORDS):
-                    continue
-                if not any(kw in full_text for kw in _CROP_CHECK_KEYWORDS) and len(full_text) < 20:
-                    continue
+                    if any(kw in full_text for kw in _CROP_JUNK_KEYWORDS):
+                        continue
+                    if (
+                        not any(kw in full_text for kw in _CROP_CHECK_KEYWORDS)
+                        and len(full_text) < 20
+                    ):
+                        continue
 
                 img_hash = _simple_image_hash(enhanced_np)
                 if img_hash in seen_hashes:
@@ -844,10 +1057,15 @@ def _crop_checks(
                         "height": int(h),
                         "aspect_ratio": round(float(aspect), 3),
                         "image_b64": b64,
-                        "notes": f"v2.43.2 local grid+dedup (thresh {thresh_idx})",
+                        "notes": (
+                            f"v2.43.2 local grid+dedup (thresh {thresh_idx})"
+                            if ocr_validation
+                            else f"geometry crop (thresh {thresh_idx})"
+                        ),
                     }
                 )
-                detections_by_id[check_id] = detections
+                if detections:
+                    detections_by_id[check_id] = detections
                 check_counter += 1
                 page_hits += 1
 
@@ -962,9 +1180,7 @@ def _is_clean_payee(text: str) -> bool:
 
     letters = sum(1 for c in stripped if c.isalpha())
     digits = sum(1 for c in stripped if c.isdigit())
-    nonalnum_nonspace = sum(
-        1 for c in stripped if not c.isalnum() and not c.isspace() and c != "&"
-    )
+    nonalnum_nonspace = sum(1 for c in stripped if not c.isalnum() and not c.isspace() and c != "&")
     if letters == 0:
         return False
     if digits / letters > 0.40:
@@ -1245,6 +1461,41 @@ def _build_review_reason(existing: str, new_bit: str) -> str:
     return "; ".join(cleaned)
 
 
+_HYBRID_CV_NOTE_PREFIX = "G1 hybrid CV"
+
+
+def _resolve_check_extractions_for_match(
+    check: dict[str, Any],
+    detections: list[Any],
+) -> tuple[str, str, float, float | None, bool]:
+    """Prefer hybrid CV+rules payee/check# when the hybrid leg already enriched this crop.
+
+    The hybrid leg sets ``extracted_payee`` only after the advanced payee_extractor
+    ``is_clean_payee`` passes. Legacy EasyOCR heuristics are fallbacks only.
+    """
+    legacy_check_no = _extract_check_number_from_detections(detections)
+    legacy_payee, legacy_conf = _extract_payee_from_check_detections(detections)
+    legacy_amount = _extract_amount_from_detections(detections)
+
+    hybrid_note = str(check.get("notes", "")).startswith(_HYBRID_CV_NOTE_PREFIX)
+    hybrid_payee = str(check.get("extracted_payee") or "").strip()
+    hybrid_conf = float(check.get("extracted_payee_confidence") or 0.0)
+    hybrid_check_no = str(check.get("extracted_check_number") or "").strip()
+
+    used_hybrid_payee = False
+    if hybrid_note and hybrid_payee:
+        extracted_payee, payee_conf = hybrid_payee, hybrid_conf
+        used_hybrid_payee = True
+    else:
+        extracted_payee, payee_conf = legacy_payee, legacy_conf
+
+    extracted_check_no = legacy_check_no
+    if hybrid_note and hybrid_check_no:
+        extracted_check_no = hybrid_check_no
+
+    return extracted_check_no, extracted_payee, payee_conf, legacy_amount, used_hybrid_payee
+
+
 def _match_checks_to_transactions(
     transactions: list[dict[str, Any]],
     cropped_checks: list[dict[str, Any]],
@@ -1254,11 +1505,11 @@ def _match_checks_to_transactions(
 
     logs: list[str] = []
     if not transactions and not cropped_checks:
-        return transactions, cropped_checks, logs
+        return transactions, cropped_checks, logs, 0
 
     if not cropped_checks:
         logs.append(_log("info", "Check-linking: 0 cropped check(s); nothing to match."))
-        return transactions, cropped_checks, logs
+        return transactions, cropped_checks, logs, 0
 
     if not transactions:
         logs.append(
@@ -1284,14 +1535,28 @@ def _match_checks_to_transactions(
             by_check_no.setdefault(norm, []).append(i)
 
     used_txn_indices: set[int] = set()
+    hybrid_payees_in_final_table = 0
 
     for check in cropped_checks:
         check_id = str(check.get("check_id", "?"))
         detections = detections_by_id.get(check_id, [])
 
-        extracted_check_no = _extract_check_number_from_detections(detections)
-        extracted_payee, payee_conf = _extract_payee_from_check_detections(detections)
-        extracted_amount = _extract_amount_from_detections(detections)
+        (
+            extracted_check_no,
+            extracted_payee,
+            payee_conf,
+            extracted_amount,
+            used_hybrid_payee,
+        ) = _resolve_check_extractions_for_match(check, detections)
+
+        if used_hybrid_payee:
+            logs.append(
+                _log(
+                    "info",
+                    f"  {check_id}: using CV+rules payee {extracted_payee!r} "
+                    f"(legacy heuristic skipped).",
+                )
+            )
 
         check["extracted_check_number"] = extracted_check_no
         check["extracted_payee"] = extracted_payee
@@ -1374,10 +1639,17 @@ def _match_checks_to_transactions(
             txn["Payee"] = raw_new_payee
             txn["Confidence"] = "High"
             txn["NeedsReview"] = "No"
+            payee_provenance = (
+                f"G1 hybrid CV Read + payee rules ({match_reason})"
+                if used_hybrid_payee
+                else f"Payee from check image ({match_reason})"
+            )
             txn["ReviewReason"] = _build_review_reason(
                 str(txn.get("ReviewReason", "")),
-                f"Payee from check image ({match_reason})",
+                payee_provenance,
             )
+            if used_hybrid_payee:
+                hybrid_payees_in_final_table += 1
         else:
             # Match found but the extracted payee was empty OR failed the
             # quality guard. Record the link and downgrade Medium-or-lower
@@ -1414,8 +1686,16 @@ def _match_checks_to_transactions(
             f"transactions; {len(cropped_checks) - linked} unmatched (returned for manual review).",
         )
     )
+    if hybrid_payees_in_final_table:
+        logs.append(
+            _log(
+                "info",
+                f"Table compilation: {hybrid_payees_in_final_table} payee(s) upgraded via "
+                "G1 hybrid CV Read + payee rules in the final transaction table.",
+            )
+        )
 
-    return transactions, cropped_checks, logs
+    return transactions, cropped_checks, logs, hybrid_payees_in_final_table
 
 
 # ---------------------------------------------------------------------------
@@ -2399,9 +2679,7 @@ _CHECK_REG_TRIPLET_RE = re.compile(
     r"(\d{1,2}[/-]\d{1,2})\s+\*?\s*(\d{3,6})\s*\*?\s+"
     r"(\d{1,3}(?:,\d{3})*\.\d{2})"
 )
-_FULL_DATE_PREFIX_RE = re.compile(
-    r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})(?!\d)(?:\s+(.*))?$"
-)
+_FULL_DATE_PREFIX_RE = re.compile(r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})(?!\d)(?:\s+(.*))?$")
 _OCR_JUNK_TERMINAL_RE = re.compile(r"(?i)\b(?:terminal\s+(?:d|i|did|id)\b|serial\s*#)")
 
 
@@ -2505,9 +2783,7 @@ def _preprocess_ocr_line(line: str) -> str:
     # Step 2: substitute O→0 / o→0 / I→1 / l→1 inside money tokens only.
     def _fix(match: re.Match[str]) -> str:
         tok = match.group(0)
-        return (
-            tok.replace("O", "0").replace("o", "0").replace("I", "1").replace("l", "1")
-        )
+        return tok.replace("O", "0").replace("o", "0").replace("I", "1").replace("l", "1")
 
     s = _OCR_MONEY_TOKEN_RE.sub(_fix, s)
 
@@ -2630,9 +2906,7 @@ def _fuse_split_date_lines(lines: list[str]) -> list[str]:
     return out
 
 
-_DATE_AMT_NO_CHECK_RE = re.compile(
-    r"(\d{1,2}[/-]\d{1,2})\s+(\d{1,3}(?:,\d{3})*\.\d{2})(?:\s+|$)"
-)
+_DATE_AMT_NO_CHECK_RE = re.compile(r"(\d{1,2}[/-]\d{1,2})\s+(\d{1,3}(?:,\d{3})*\.\d{2})(?:\s+|$)")
 _BARE_CHECK_NUM_RE = re.compile(r"^\s*(\d{4})\s*$")
 
 
@@ -2705,9 +2979,7 @@ def _splice_orphan_check_numbers(lines: list[str]) -> list[str]:
     return out
 
 
-def _parse_ocr_lines_to_transactions(
-    lines: list[str], default_year: int
-) -> list[dict[str, Any]]:
+def _parse_ocr_lines_to_transactions(lines: list[str], default_year: int) -> list[dict[str, Any]]:
     """Strict OCR-mode parser — see module docstring above for design notes."""
 
     # Step 0a: clean up OCR letter↔digit substitutions and whitespace so

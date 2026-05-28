@@ -130,8 +130,10 @@ import json
 import logging
 import os
 import re
+import sys
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import azure.functions as func
@@ -174,6 +176,21 @@ OCR_FAST_PATH_MIN_ROWS = int(os.environ.get("OCR_FAST_PATH_MIN_ROWS", "3"))
 
 # Module-level cache for the heavy easyocr Reader (avoids reloading on warm calls).
 _EASYOCR_READER: Any = None
+
+_HYBRID_CV_NOTE_PREFIX = "G1 hybrid CV"
+
+
+def _import_hybrid_cv_modules() -> tuple[Any, Any]:
+    """Load shared hybrid leg from ``App/`` when present in the deployment (optional)."""
+    app_dir = Path(__file__).resolve().parents[2] / "App"
+    if app_dir.is_dir() and str(app_dir) not in sys.path:
+        sys.path.insert(0, str(app_dir))
+    try:
+        from hybrid_cv_check_leg import cv_check_leg_available, run_hybrid_check_leg
+
+        return cv_check_leg_available, run_hybrid_check_leg
+    except ImportError:
+        return None, None
 
 
 app = func.FunctionApp(http_auth_level=_AUTH_LEVEL)
@@ -258,6 +275,9 @@ def ocr_process(req: func.HttpRequest) -> func.HttpResponse:
         "cropped_checks": result.get("cropped_checks", []),
         "logs": logs + result.get("logs", []),
         "message": result.get("message", ""),
+        "hybrid_cv_used": bool(result.get("hybrid_cv_used")),
+        "cv_crops_enriched": int(result.get("cv_crops_enriched") or 0),
+        "cv_payees_in_final_table": int(result.get("cv_payees_in_final_table") or 0),
     }
 
     return _json_response(status_code=200, body=response_body)
@@ -381,6 +401,10 @@ def _run_ocr_pipeline(
     transactions: list[dict[str, Any]] = []
     cropped_checks: list[dict[str, Any]] = []
     detections_by_id: dict[str, list[Any]] = {}
+    hybrid_cv_used = False
+    cv_crops_enriched = 0
+    cv_payees_in_final_table = 0
+    register_page1_text = ""
     fast_path_rows = 0
     fallback_rows = 0
     default_year = datetime.utcnow().year
@@ -388,6 +412,7 @@ def _run_ocr_pipeline(
     # 1) pdfplumber fast path -------------------------------------------------
     try:
         text_blob, tables, fast_logs, statement_year = _extract_pdfplumber(pdf_bytes)
+        register_page1_text = text_blob[:4000] if text_blob.strip() else ""
         pipeline_logs.extend(fast_logs)
         default_year = statement_year or default_year
 
@@ -457,20 +482,62 @@ def _run_ocr_pipeline(
         except Exception as exc:  # noqa: BLE001 — never crash the request
             pipeline_logs.append(_log("error", f"EasyOCR fallback failed: {exc}"))
 
-    # 3) Check cropping (best-effort) ----------------------------------------
+    # 3) Check cropping (geometry only — no EasyOCR on crop images) ----------
     try:
-        cropped_checks, detections_by_id, crop_logs = _crop_checks(pdf_bytes)
+        cropped_checks, detections_by_id, crop_logs = _crop_checks(
+            pdf_bytes,
+            ocr_validation=False,
+        )
         pipeline_logs.extend(crop_logs)
     except ModuleNotFoundError as exc:
         pipeline_logs.append(
             _log(
                 "warn",
                 f"Check cropper unavailable ({exc}). Install opencv-python-headless + "
-                "pdf2image + easyocr + pillow to enable cropped-check images.",
+                "pdf2image + pillow to enable cropped-check images.",
             )
         )
     except Exception as exc:  # noqa: BLE001 — cropping is optional
         pipeline_logs.append(_log("warn", f"Check cropper failed: {exc}"))
+
+    # 3b) Azure CV Read — sole post-crop text reader when App/ + creds/cache exist
+    cv_available_fn, run_hybrid_fn = _import_hybrid_cv_modules()
+    cv_ready = bool(cv_available_fn and cv_available_fn())
+    if run_hybrid_fn and cv_ready and cropped_checks:
+        hybrid_cv_used = True
+        try:
+            client_name = str(metadata.get("client") or "").strip() or None
+            cropped_checks, detections_by_id, hybrid_logs = run_hybrid_fn(
+                cropped_checks,
+                detections_by_id,
+                register_page1_text=register_page1_text or None,
+                client_name=client_name,
+            )
+            pipeline_logs.extend(hybrid_logs)
+            cv_crops_enriched = sum(
+                1
+                for crop in cropped_checks
+                if str(crop.get("notes", "")).startswith(_HYBRID_CV_NOTE_PREFIX)
+            )
+            pipeline_logs.append(
+                _log(
+                    "info",
+                    f"Hybrid CV results returned for {cv_crops_enriched} imaging-page crop(s); "
+                    "merging superior payees back into local table compilation.",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — hybrid leg is best-effort
+            hybrid_cv_used = False
+            pipeline_logs.append(_log("warn", f"Hybrid CV check leg failed: {exc}"))
+    elif cropped_checks and not cv_ready:
+        pipeline_logs.append(
+            _log(
+                "info",
+                "Image intelligence (payee extraction from checks) requires Azure CV "
+                "credentials or SLAM_CV_CACHE_DIR. Cropped images were produced but not "
+                "auto-read.",
+            )
+        )
 
     # 4) Normalize → 12-column shape + grok_totals + status -------------------
     canonical = [
@@ -482,10 +549,18 @@ def _run_ocr_pipeline(
     # rows that ship in the response). Safe no-op when there are 0 checks or
     # 0 transactions.
     try:
-        canonical, cropped_checks, match_logs = _match_checks_to_transactions(
-            canonical, cropped_checks, detections_by_id
+        canonical, cropped_checks, match_logs, cv_payees_in_final_table = (
+            _match_checks_to_transactions(canonical, cropped_checks, detections_by_id)
         )
         pipeline_logs.extend(match_logs)
+        if hybrid_cv_used and cv_crops_enriched:
+            pipeline_logs.append(
+                _log(
+                    "info",
+                    f"Round-trip merge complete: {cv_crops_enriched} CV-enriched crop(s), "
+                    f"{cv_payees_in_final_table} payee(s) applied in the final table.",
+                )
+            )
     except Exception as exc:  # noqa: BLE001 — matcher is best-effort
         pipeline_logs.append(_log("warn", f"Check-to-transaction matcher failed: {exc}"))
 
@@ -528,6 +603,9 @@ def _run_ocr_pipeline(
         "cropped_checks": cropped_checks,
         "logs": pipeline_logs,
         "message": message,
+        "hybrid_cv_used": hybrid_cv_used,
+        "cv_crops_enriched": cv_crops_enriched,
+        "cv_payees_in_final_table": cv_payees_in_final_table,
     }
 
 
@@ -723,15 +801,13 @@ _CROP_JUNK_KEYWORDS = (
 
 def _crop_checks(
     pdf_bytes: bytes,
+    *,
+    ocr_validation: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, list[Any]], list[str]]:
-    """Detect, crop, and validate check images.
+    """Detect and crop check images. Geometry-only by default (no EasyOCR on crops).
 
-    v2.43 also returns a parallel ``detections_by_id`` mapping (check_id →
-    raw EasyOCR token detections ``[(bbox, text, confidence), ...]``) so the
-    matcher can locate the "Pay to the order of" line spatially without
-    re-running OCR. The detections are intentionally NOT included in the
-    HTTP response (they'd inflate the payload by 5-10×); only the matcher
-    consumes them.
+    Post-crop text is populated solely via ``run_hybrid_check_leg`` when Azure CV is
+    configured. Legacy ``ocr_validation=True`` retains EasyOCR keyword filtering for tooling.
     """
 
     import cv2  # noqa: PLC0415
@@ -748,8 +824,37 @@ def _crop_checks(
     if len(pages) > OCR_MAX_PAGES_RASTER:
         pages = pages[:OCR_MAX_PAGES_RASTER]
 
-    reader = _get_easyocr_reader()
-    logs.append(_log("info", f"Check cropper scanning {len(pages)} page(s) at {OCR_DPI_CROP} DPI."))
+    imaging_first = 1
+    imaging_last: int | None = None
+    if not ocr_validation:
+        try:
+            _cv_fn, _hybrid_fn = _import_hybrid_cv_modules()
+            if _hybrid_fn is not None:
+                from hybrid_cv_check_leg import imaging_page_range  # noqa: PLC0415
+
+                imaging_first, imaging_last = imaging_page_range()
+            else:
+                imaging_first, imaging_last = 5, None
+        except Exception:
+            imaging_first, imaging_last = 5, None
+
+    reader = None
+    if ocr_validation:
+        reader = _get_easyocr_reader()
+        logs.append(_log("info", f"Check cropper (OCR validation) scanning {len(pages)} page(s)."))
+    else:
+        span = (
+            f"{imaging_first}-{imaging_last}"
+            if isinstance(imaging_last, int)
+            else f"{imaging_first}+"
+        )
+        logs.append(
+            _log(
+                "info",
+                f"Check cropper (geometry only, pages {span}) scanning {len(pages)} page(s) "
+                f"at {OCR_DPI_CROP} DPI.",
+            )
+        )
 
     seen_hashes: set[str] = set()
     checks: list[dict[str, Any]] = []
@@ -760,6 +865,13 @@ def _crop_checks(
         if len(checks) >= OCR_MAX_CHECKS:
             logs.append(_log("warn", f"Hit OCR_MAX_CHECKS={OCR_MAX_CHECKS}; stopping cropper."))
             break
+
+        page_num = page_idx + 1
+        if not ocr_validation:
+            if page_num < imaging_first:
+                continue
+            if imaging_last is not None and page_num > imaging_last:
+                continue
 
         img = np.array(page)
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -801,27 +913,27 @@ def _crop_checks(
                 )
                 enhanced_np = np.array(enhanced)
 
-                # v2.43: detail=1 + paragraph=False gives us per-token bboxes
-                # so the matcher can locate the "Pay to the order of" line
-                # without re-running OCR. The validation step below uses the
-                # joined text exactly like v2.42 did, so the keyword/junk
-                # filters are unchanged.
-                try:
-                    detections = reader.readtext(
-                        enhanced_np,
-                        detail=1,
-                        paragraph=False,
-                        text_threshold=_CROP_OCR_TEXT_THRESHOLD,
-                    )
-                except Exception:
-                    continue
-                text_tokens = [str(d[1]) for d in detections if len(d) >= 2 and d[1]]
-                full_text = " ".join(text_tokens).lower()
+                detections: list[Any] = []
+                if ocr_validation and reader is not None:
+                    try:
+                        detections = reader.readtext(
+                            enhanced_np,
+                            detail=1,
+                            paragraph=False,
+                            text_threshold=_CROP_OCR_TEXT_THRESHOLD,
+                        )
+                    except Exception:
+                        continue
+                    text_tokens = [str(d[1]) for d in detections if len(d) >= 2 and d[1]]
+                    full_text = " ".join(text_tokens).lower()
 
-                if any(kw in full_text for kw in _CROP_JUNK_KEYWORDS):
-                    continue
-                if not any(kw in full_text for kw in _CROP_CHECK_KEYWORDS) and len(full_text) < 20:
-                    continue
+                    if any(kw in full_text for kw in _CROP_JUNK_KEYWORDS):
+                        continue
+                    if (
+                        not any(kw in full_text for kw in _CROP_CHECK_KEYWORDS)
+                        and len(full_text) < 20
+                    ):
+                        continue
 
                 img_hash = _simple_image_hash(enhanced_np)
                 if img_hash in seen_hashes:
@@ -841,10 +953,15 @@ def _crop_checks(
                         "height": int(h),
                         "aspect_ratio": round(float(aspect), 3),
                         "image_b64": b64,
-                        "notes": f"v2.43 grid+dedup (thresh {thresh_idx})",
+                        "notes": (
+                            f"v2.43 grid+dedup (thresh {thresh_idx})"
+                            if ocr_validation
+                            else f"geometry crop (thresh {thresh_idx})"
+                        ),
                     }
                 )
-                detections_by_id[check_id] = detections
+                if detections:
+                    detections_by_id[check_id] = detections
                 check_counter += 1
                 page_hits += 1
 
@@ -1214,6 +1331,34 @@ def _build_review_reason(existing: str, new_bit: str) -> str:
     return "; ".join(cleaned)
 
 
+def _resolve_check_extractions_for_match(
+    check: dict[str, Any],
+    detections: list[Any],
+) -> tuple[str, str, float, float | None, bool]:
+    """Prefer hybrid CV+rules payee/check# when the hybrid leg enriched this crop."""
+    legacy_check_no = _extract_check_number_from_detections(detections)
+    legacy_payee, legacy_conf = _extract_payee_from_check_detections(detections)
+    legacy_amount = _extract_amount_from_detections(detections)
+
+    hybrid_note = str(check.get("notes", "")).startswith(_HYBRID_CV_NOTE_PREFIX)
+    hybrid_payee = str(check.get("extracted_payee") or "").strip()
+    hybrid_conf = float(check.get("extracted_payee_confidence") or 0.0)
+    hybrid_check_no = str(check.get("extracted_check_number") or "").strip()
+
+    used_hybrid_payee = False
+    if hybrid_note and hybrid_payee:
+        extracted_payee, payee_conf = hybrid_payee, hybrid_conf
+        used_hybrid_payee = True
+    else:
+        extracted_payee, payee_conf = legacy_payee, legacy_conf
+
+    extracted_check_no = legacy_check_no
+    if hybrid_note and hybrid_check_no:
+        extracted_check_no = hybrid_check_no
+
+    return extracted_check_no, extracted_payee, payee_conf, legacy_amount, used_hybrid_payee
+
+
 def _match_checks_to_transactions(
     transactions: list[dict[str, Any]],
     cropped_checks: list[dict[str, Any]],
@@ -1229,11 +1374,11 @@ def _match_checks_to_transactions(
 
     logs: list[str] = []
     if not transactions and not cropped_checks:
-        return transactions, cropped_checks, logs
+        return transactions, cropped_checks, logs, 0
 
     if not cropped_checks:
         logs.append(_log("info", "Check-linking: 0 cropped check(s); nothing to match."))
-        return transactions, cropped_checks, logs
+        return transactions, cropped_checks, logs, 0
 
     if not transactions:
         logs.append(
@@ -1259,16 +1404,29 @@ def _match_checks_to_transactions(
         if norm:
             by_check_no.setdefault(norm, []).append(i)
 
-    # Prefer Check Register rows when amount+date matching, but allow any txn.
     used_txn_indices: set[int] = set()
+    hybrid_payees_in_final_table = 0
 
     for check in cropped_checks:
         check_id = str(check.get("check_id", "?"))
         detections = detections_by_id.get(check_id, [])
 
-        extracted_check_no = _extract_check_number_from_detections(detections)
-        extracted_payee, payee_conf = _extract_payee_from_check_detections(detections)
-        extracted_amount = _extract_amount_from_detections(detections)
+        (
+            extracted_check_no,
+            extracted_payee,
+            payee_conf,
+            extracted_amount,
+            used_hybrid_payee,
+        ) = _resolve_check_extractions_for_match(check, detections)
+
+        if used_hybrid_payee:
+            logs.append(
+                _log(
+                    "info",
+                    f"  {check_id}: using CV+rules payee {extracted_payee!r} "
+                    f"(legacy heuristic skipped).",
+                )
+            )
 
         check["extracted_check_number"] = extracted_check_no
         check["extracted_payee"] = extracted_payee
@@ -1346,10 +1504,17 @@ def _match_checks_to_transactions(
             txn["Payee"] = new_payee
             txn["Confidence"] = "High"
             txn["NeedsReview"] = "No"
+            payee_provenance = (
+                f"G1 hybrid CV Read + payee rules ({match_reason})"
+                if used_hybrid_payee
+                else f"Payee from check image ({match_reason})"
+            )
             txn["ReviewReason"] = _build_review_reason(
                 str(txn.get("ReviewReason", "")),
-                f"Payee from check image ({match_reason})",
+                payee_provenance,
             )
+            if used_hybrid_payee:
+                hybrid_payees_in_final_table += 1
 
         txn["linked_check_id"] = check_id
         check["linked_transaction_index"] = match_idx
@@ -1372,8 +1537,16 @@ def _match_checks_to_transactions(
             f"transactions; {len(cropped_checks) - linked} unmatched (returned for manual review).",
         )
     )
+    if hybrid_payees_in_final_table:
+        logs.append(
+            _log(
+                "info",
+                f"Table compilation: {hybrid_payees_in_final_table} payee(s) upgraded via "
+                "G1 hybrid CV Read + payee rules in the final transaction table.",
+            )
+        )
 
-    return transactions, cropped_checks, logs
+    return transactions, cropped_checks, logs, hybrid_payees_in_final_table
 
 
 # ---------------------------------------------------------------------------

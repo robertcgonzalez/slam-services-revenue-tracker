@@ -1,9 +1,8 @@
 # Local Development & PostgreSQL Guide
 
-**Purpose**: How to develop and test locally or in GitHub Codespaces, including the recommended heavy-OCR environment and the PostgreSQL path.
+**Purpose**: How to develop and test on **local Windows** (primary).
 
-**Heavy OCR policy**: GitHub Codespaces is the only supported environment for heavy OCR work (4-core/16 GB recommended).  
-**Local Windows scope**: light work only (non-heavy OCR).
+**Policy (May 2026)**: All work — including heavy Local Enhanced OCR and Azure CV — runs on local Windows. See [environment-policy.md](environment-policy.md).
 
 ---
 
@@ -11,94 +10,44 @@
 
 | I want to...                              | Recommended Path |
 |-------------------------------------------|------------------|
-| Run the full Local Enhanced OCR pipeline (EasyOCR + check cropper + payee extraction) against real PDFs | **GitHub Codespaces only** (4-core/16 GB recommended). |
-| G1 hybrid CV check leg (cache-backed or live Read) | Same heavy environment; set `SLAM_HYBRID_CV_ENABLED=true` and `check_leg_mode="hybrid_cv"` (see `Scripts/Codespace-Connection-Recipe.md`) |
-| Light work, Dashboard, Revenue Requests, rules engine (no heavy OCR) | Local Windows `.venv` (Python 3.10) or any Codespace |
-| Test PostgreSQL round-trips (edit → save → reload) | Local or Codespace with `.env` + `USE_POSTGRES=true` |
+| Run the full Local Enhanced OCR pipeline (EasyOCR + check cropper + payee extraction) against real PDFs | **Local Windows** — `Install-LocalHeavyOcr.ps1` + poppler on PATH |
+| G1 hybrid CV check leg (cache-backed or live Read) | Local Windows — `AZURE_CV_*` or `SLAM_CV_CACHE_DIR` in `.env`; use `.\run_local.ps1` |
+| Light work, Dashboard, Revenue Requests, rules engine | Local Windows `.venv` (Python 3.10) |
+| Test PostgreSQL round-trips (edit → save → reload) | Local Windows with `.env` + `USE_POSTGRES=true` |
 | Pre-UAT / production smoke test           | `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` |
 
 ---
 
-## Retired path note
-
-The local Docker mirror path is retired for heavy OCR. Keep any historical notes for traceability only.  
-Current connection and auth procedures live in [Scripts/Codespace-Connection-Recipe.md](../Scripts/Codespace-Connection-Recipe.md).
-For non-technical first-time setup, use [Scripts/Onboarding-for-Laura-Codespaces.md](../Scripts/Onboarding-for-Laura-Codespaces.md).
-
----
-
-## GitHub Codespaces (Recommended for OCR-Heavy Work)
-
-### One-click setup
-
-1. On the GitHub repo → **Code** → **Codespaces** tab → **Create codespace on main**.
-2. (Strongly recommended) Click the `…` menu → **+ New with options...** → pick the **4-core / 16 GB RAM** machine type.
-3. Wait 3–5 minutes. The post-create script provisions poppler, the `.venv`, heavy OCR libs (PyTorch is the slow part), and pre-warms the EasyOCR English model.
-4. When the shell opens:
-
-   ```bash
-   slam-run     # alias → streamlit run App/app.py
-   ```
-
-5. Port 8501 is auto-forwarded. Click the notification to open the public URL.
-
-### What you get
-
-- Base: Microsoft `python:1-3.10-bookworm` (matches Azure F1 runtime)
-- System: `poppler-utils`, `libgl1`, `libglib2.0-0`, `gh`
-- Full heavy OCR stack identical to the Azure Function (minus `azure-functions`)
-- Aliases: `slam-run`, `slam-lint`, `slam-format`, `slam-health`, `slam-info`
-- Codespaces-aware OCR defaults (lower DPI to fit in 8 GB): see `.devcontainer/devcontainer.json`
-
-### Verifying the full pipeline
-
-```bash
-slam-info      # confirms 6/6 capabilities + active DPIs
-slam-run
-```
-
-In the app: Bank Statements → upload `Data/Auto_Body_Center_Jan_26_Statement.pdf` → select **🖥️ Local Enhanced OCR (Robert only — v2.44.3)**.
-
-The sidebar **🔧 System status** expander shows the active runtime and DPI settings live.
-
-### Rebuilding the container
-
-VS Code Command Palette → **Codespaces: Rebuild Container** (keeps your uncommitted edits).
-
-### Cost & lifecycle notes
-
-- Free personal quota: 120 core-hours / 15 GB-month (2026).
-- 4-core SKU ≈ 4 core-hours per wall-clock hour.
-- Auto-stops after 30 min inactivity; resumes in ~30 s.
-- `Data/` is never committed (per `.gitignore`) — client PDFs/CSVs you copy in stay local to that Codespace.
-
----
-
-## Local Windows Development (Python 3.10 .venv, light work only)
-
-### First-time or broken venv (recommended)
+## Local Windows (primary)
 
 ```powershell
 cd C:\SLAM-Services-Project
-.\Scripts\PowerShell\Setup-LocalVenv.ps1
-.\.venv\Scripts\Activate.ps1
-streamlit run App/app.py
+.\Scripts\PowerShell\Setup-LocalVenv.ps1 -InstallHeavyOcr
+copy Scripts\spike\cv-read.env.sample .env
+.\run_local.ps1
 ```
 
-Manual equivalent for light local development:
+`run_local.ps1` activates `.venv`, loads `.env`, sets `PYTHONPATH=App`, and checks for `pdftoppm`. `App/app.py` also loads `.env` on startup.
+
+Heavy stack only (if venv already exists): `.\Scripts\PowerShell\Install-LocalHeavyOcr.ps1`
+
+Verify capabilities:
 
 ```powershell
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt ruff black
-ruff check App/ Scripts/
-streamlit run App/app.py
+$env:PYTHONPATH = "App"
+python -c "import local_enhanced_ocr as o; print(o.detect_capabilities())"
 ```
 
-### Local Enhanced OCR note
+---
 
-Heavy OCR verification and regression evidence must be produced in Codespaces.  
-Local Windows can still be used for non-heavy app development and general maintenance.
+## Local Windows — light-only shortcut
+
+If you only need Dashboard / Revenue Requests (no OCR):
+
+```powershell
+.\Scripts\PowerShell\Setup-LocalVenv.ps1
+.\run_local.ps1
+```
 
 ---
 
@@ -162,8 +111,6 @@ python Scripts/health_check.py --csv     # validates CSV fallback path
 |---------|---------|
 | `python Scripts/health_check.py --full` | CSV + Postgres + row counts |
 | `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` | Pre-UAT / post-deploy (includes live URL reachability) |
-| `slam-info` (Codespaces) | Local Enhanced OCR capability matrix + active DPIs |
-| `slam-health` | Quick CSV-mode probe |
 | Sidebar **🔧 System status** (in-app) | Live capability detection, runtime, data freshness |
 
 ---
@@ -174,18 +121,22 @@ python Scripts/health_check.py --csv     # validates CSV fallback path
 |----------|-----------------|
 | `USE_POSTGRES` | `false` (CSV mode). Set `true` to enable DB writes. |
 | `SLAM_APP_USER` | Actor name shown in UI and written to Postgres (e.g. `Laura`). |
-| `SLAM_LOCAL_OCR_DPI_TEXT` / `SLAM_LOCAL_OCR_DPI_CROP` | 200/220 in Codespaces (lower to fit 8 GB); 300/250 on Robert's local Windows for max fidelity. |
-| `SLAM_LOCAL_OCR_MAX_CHECKS` | 50 (v2.44.3) |
+| `SLAM_LOCAL_OCR_DPI_TEXT` / `SLAM_LOCAL_OCR_DPI_CROP` | 300/250 on local Windows for max fidelity (override in `.env` if needed). |
+| `SLAM_LOCAL_OCR_MAX_CHECKS` | 40 (default); raise if cropping truncates on long statements. |
+| `AZURE_CV_ENDPOINT` / `AZURE_CV_KEY` | Live Azure CV Read on check photos (Local Enhanced auto-enables when set). Keep in `.env` only. |
+| `SLAM_IMAGING_FIRST_PAGE` / `SLAM_IMAGING_LAST_PAGE` | Imaging-page scope for CV crop OCR (Traditions hard PDF: `5` / `9`). |
+| `SLAM_CV_CACHE_DIR` | Optional cache for zero-cost dev reruns (reuses saved CV JSON; enables CV leg without live calls). |
+| `SLAM_CLIENT_NAME` | Optional client hint for bank profile / payee scoring. |
+| `SLAM_HYBRID_CV_ENABLED` | Legacy optional gate for production; not required for Local Enhanced (Sprint 3.3). |
 
 ---
 
 ## Related Files
 
-- `.devcontainer/devcontainer.json` + `postCreateCommand.sh` — Codespaces definition and 7-stage provisioner
-- `docs/codespaces-connection-recipe.md` — how Cursor/Grok reliably SSH into the primary mirroring Codespace (must-use for heavy OCR regression testing)
 - `App/local_enhanced_ocr.py` — the in-process v2.44.3 pipeline (heavy-OCR path)
-- `Scripts/test_local_ocr_regression.py` — the regression harness that must be run inside the mirroring Codespace
+- `Scripts/test_local_ocr_regression.py` — regression harness (run on local Windows)
+- [environment-policy.md](environment-policy.md) — official dev-environment policy
 
 ---
 
-**Last major update**: Extracted & condensed during 2026-05-27 README TLC pass. Historical deployment and OCR pipeline decisions live in the Blueprint Change Log.
+**Last major update**: May 28, 2026 — removed GitHub Codespaces / `.devcontainer` path; local Windows only. Historical deployment and OCR pipeline decisions live in the Blueprint Change Log.

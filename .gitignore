@@ -58,6 +58,8 @@ Project-Structure-Report.txt
 
 # ==================== Development Artifacts ====================
 Scripts/_streamlit_bank_uploads/
+Scripts/cropped_checks_final_dynamic/
+.venv.windows-backup*/
 # Local Enhanced OCR (v2.44+) — cached EasyOCR/pipeline lines from real
 # client bank statements. These accelerate the regression test
 # (`Scripts/test_local_ocr_regression.py`) by avoiding a 10-min EasyOCR

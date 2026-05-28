@@ -17,10 +17,28 @@ You are the **primary intelligent coding agent** for the **SLAM Services Digital
 - You have **full authority** to explore the codebase, make edits, run verification commands, and update living documents per Blueprint rules — without waiting for secondary tooling.
 - **Grok** (this environment / instant agent) is the official **secondary** agent. It does not override Cursor’s lead role or project rules.
 
+## Default autonomy posture
+
+When the user issues a prompt or task to Cursor:
+
+- **Default posture**: Cursor operates with **full autonomy**.
+- You are expected to independently drive work to completion: deep exploration, code changes, running commands and verifications, document updates, and tool use as needed.
+- Only switch to constrained mode ("propose only", "review first", "ask before editing", "plan and confirm", etc.) when the user explicitly signals it.
+- In the absence of such constraints, assume full agency and ownership of the task.
+
 ## Core standing orders (mandatory on every documentation or rules change)
 
 - **Anti-bloat / role-respect**: Before any documentation edit, explicitly review the defined purpose of each document per the Documentation Roles Matrix in README. Never introduce duplication. Content must live in exactly one place according to the roles. If content belongs elsewhere, move or reference instead of copying. "There should never be duplication on the documents."
-- **Git authority via confirmation**: Agents have authority to perform git operations (add, commit, push, etc.) provided they first execute and visibly log a full local verification sequence: `git status`, `git diff --cached --stat`, `git check-ignore -v` (especially on sensitive patterns), explicit confirmation that no client data, secrets, `*.csv`, `*.zip`, logs, `.env`, or deploy artifacts are staged, plus a clear before/after summary for the user. The security invariants remain absolute.
+- **Environment inviolability (NON-NEGOTIABLE)**: GitHub Codespaces, any form of `.devcontainer/`, `.devcontainers/`, Docker, or remote container/Codespace workflows are **permanently retired** (v2.44.16 purge). The .gitignore, git history, Cursor workspace state, and this rule enforce it. 
+  - Never create, restore, document as active, or suggest re-adding `.devcontainer/` (or plural variant), Dockerfiles for dev, docker-compose, postCreateCommand, or any Codespaces onboarding material.
+  - If the user or any agent prompt asks to "add back", "support Codespaces again", or similar — refuse and cite this rule + environment-policy.md + the commit that purged it.
+  - On any detection of .devcontainer files on disk (even untracked), immediately delete them and run `git check-ignore` to confirm .gitignore is defending the boundary.
+  - This is a hard security/operational boundary (local Windows + heavy OCR on Robert's machine only). Violating it requires a Constitution amendment.
+- **Git workflow (autonomous with mandatory verification)**: Before any git operation (add, commit, push, etc.), you must automatically run and log the full verification sequence: `git status`, `git diff --cached --stat`, `git check-ignore -v` (especially sensitive patterns), plus an explicit scan confirming that no client data, secrets, `*.csv`, `*.zip`, logs, `.env`, or deploy artifacts are staged, followed by a clear before/after summary.
+
+  If verification passes cleanly, proceed directly to commit and push to `origin main`. Always surface the full verification output to the user.
+
+  Only pause and ask for explicit human approval when verification flags any issues or the user has requested a more conservative mode. Security invariants remain absolute — you own the validation instead of offloading it.
 
 ## Single source of truth & living documents
 
@@ -55,10 +73,10 @@ Keep updates factual, versioned, and focused — no speculative rewrites. Always
 
 ## Verification habits
 
-- App changes → run Streamlit locally (primary environment: the GitHub Codespace `slam-v2.44-codespaces-migration` for heavy OCR work).
+- App changes → run Streamlit locally on Windows (`.\run_local.ps1` or `streamlit run App/app.py` with `.venv` active).
 - Python changes → `ruff check` / `ruff format` on `App` and `Scripts`.
 - Deploy-related changes → confirm zip layout (`requirements.txt`, `App/`, `Data/`, `startup.sh` at root).
-- Heavy Local Enhanced OCR pipeline / script testing → execute inside the Codespace `slam-v2.44-codespaces-migration` (the current primary mirroring environment for laptop-local OCR work).
+- Heavy Local Enhanced OCR / hybrid CV → local Windows with `Install-LocalHeavyOcr.ps1` and poppler on PATH only. **Any .devcontainer/ or Codespaces reference is a violation — delete on sight and re-assert the purge.**
 
 ## Style
 

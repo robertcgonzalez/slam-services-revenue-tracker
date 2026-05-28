@@ -1,0 +1,63 @@
+# Regions Bank composite layout — deeper scan + Y-band preference.
+bank_id: regions
+legacy_mode: false
+anchor_phrases:
+  - "order of"
+  - "pay to"
+  - "asper of"
+  - "order ofe"
+  - "ty to the"
+  - "to vill"
+  - "to the"
+  - "pay"
+post_anchor_scan: 8
+whole_crop_scan: true
+fallback_mode: best_ranked
+ranking_mode: multi_candidate
+spatial:
+  enabled: true
+  y_min: 0.13
+  y_max: 0.38
+  y_penalty_below: 0.12
+  y_penalty_above: 0.52
+denylist_bank_id: regions
+# Signature-line detection (OCR-tolerant). Used for post-signature payee boost.
+signature_markers:
+  primary_substrings:
+    - "authorized sign"
+  paired_substrings:
+    - ["authorized", "sionature"]
+    - ["authorized", "signatur"]
+    - ["authorized", "signal"]
+    - ["authoriz", "sign"]
+# Regions-specific ranking penalties/boosts (human E1 review 2026-05-27).
+#
+# Design note (FM-1 / third-bank PDF): Prefer signature-zone boost + narrow
+# business-block penalties here over aggressive generic penalties. Residual
+# OCR business-line strings are mapped with high-precision check rules in
+# Data/check_payee_rules.csv (exact pattern → human-confirmed payee). Broad
+# Hernandez/LLC rules were removed after false positives on the 16-crop sample.
+scoring:
+  signature_zone:
+    boost_after: 16
+    boost_immediate_next: 10
+  business_block_penalty:
+    substrings:
+      - "custom concrete"
+      - "custom conercte"
+      - "hernandez custom"
+    penalty: -20
+    singleton_variants:
+      - "hernandez"
+      - "olernandez"
+      - "ofernandez"
+      - "chernandez"
+    singleton_penalty: -12
+  # FM-7: account-holder header over pay line (QCR B5). Client substrings override generic.
+  payer_header_penalty:
+    substrings: []
+    penalty: -20
+    generic_suffix_enabled: true
+    generic_suffix_penalty: -14
+    top_band_y_max: 0.22
+    top_band_extra_penalty: -6
