@@ -2142,7 +2142,23 @@ def _run_azure_ocr_via_document_intelligence(
             logs.append(_log("warn", f"Azure check analyzer skipped: {exc}"))
 
         check_txns = checks_to_transaction_rows(checks)
-        combined = register_txns + check_txns
+
+        # Smarter assembly to avoid row bloat on heavily imaged statements:
+        # 1. Enrich any matching register rows with high-quality payees from checks (existing logic).
+        # 2. Only append check-derived rows whose check number was NOT already present in the register pass.
+        #    This prevents duplicating the same checks as separate "CHECK #### Payee" rows when the
+        #    register leg captured them (or partials). On sparse-register PDFs (most activity on
+        #    imaging pages), the unmatched check rows still supply the missing transactions cleanly.
+        register_check_nums = {
+            str(r.get("Check#") or "").strip()
+            for r in register_txns
+            if str(r.get("Check#") or "").strip()
+        }
+        supplemental_check_txns = [
+            t for t in check_txns
+            if str(t.get("Check#") or "").strip() not in register_check_nums
+        ]
+        combined = register_txns + supplemental_check_txns
         df = _parse_ocr_response_to_df({"transactions": combined})
         df = _dedupe_azure_transactions(df)
         meta["transaction_count"] = int(len(df))
@@ -2170,6 +2186,7 @@ def _run_azure_ocr_via_document_intelligence(
         meta["azure_checks"] = checks
         meta["register_transaction_count"] = len(register_txns)
         meta["check_transaction_count"] = len(check_txns)
+        meta["supplemental_check_rows"] = len(supplemental_check_txns)
         meta["pages_analyzed"] = pages_str or check_pages
         merged = 0
         if checks:
@@ -2179,7 +2196,8 @@ def _run_azure_ocr_via_document_intelligence(
             _log(
                 "ok",
                 f"Combined {len(df)} transaction row(s): {len(register_txns)} register + "
-                f"{len(check_txns)} from checks; payee merge on {merged} row(s).",
+                f"{len(supplemental_check_txns)} supplemental from checks (of {len(check_txns)} raw); "
+                f"payee merge on {merged} row(s).",
             )
         )
 

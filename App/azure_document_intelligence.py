@@ -659,7 +659,13 @@ def analyze_checks_on_imaging_pages(
 
 
 def checks_to_transaction_rows(checks: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Build canonical transaction rows from Azure check fields (withdrawals)."""
+    """Build canonical transaction rows from Azure check fields (withdrawals).
+
+    Produces clean rows suitable for concat with register transactions:
+    - Description uses the extracted payee (no "CHECK #### Payee" duplication).
+    - ReviewReason is informative and includes crop filename when available.
+    - Date left blank (check model rarely has reliable posting date; register leg supplies it).
+    """
 
     default_year = datetime.now().year
     rows: list[dict[str, str]] = []
@@ -675,13 +681,24 @@ def checks_to_transaction_rows(checks: list[dict[str, Any]]) -> list[dict[str, s
             continue
         payee = str(check.get("pay_to") or "").strip()
         check_num = str(check.get("check_number") or "").strip()
-        desc_parts = ["CHECK"]
-        if check_num:
-            desc_parts.append(check_num)
+        crop_file = str(check.get("crop_file") or "").strip()
+
+        # Clean description: prefer payee; fall back to minimal check reference.
         if payee:
-            desc_parts.append(payee)
-        description = " ".join(desc_parts)
+            description = payee
+        elif check_num:
+            description = f"Check {check_num}"
+        else:
+            description = "Check (image)"
+
         conf_label = str(check.get("confidence_label") or "Medium")
+
+        # Informative reason; include crop provenance when present (from per-crop Azure leg).
+        if crop_file:
+            review_reason = f"Azure prebuilt-check.us on {crop_file}"
+        else:
+            review_reason = "Azure prebuilt-check.us (check image)"
+
         rows.append(
             {
                 "Date": "",
@@ -695,7 +712,7 @@ def checks_to_transaction_rows(checks: list[dict[str, Any]]) -> list[dict[str, s
                 "YearMonth": f"{default_year}-01",
                 "Confidence": conf_label,
                 "NeedsReview": "Yes" if conf_label != "High" else "No",
-                "ReviewReason": "From Azure prebuilt-check.us (imaging page)",
+                "ReviewReason": review_reason,
             }
         )
     return rows

@@ -146,6 +146,7 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
 
     all_crops: list[dict[str, Any]] = []
     check_counter = 0
+    rejections: dict[str, int] = {"size": 0, "aspect": 0, "variance": 0, "rough_dup": 0}
 
     for page_idx, page in enumerate(pages):
         if len(all_crops) >= _MAX_CROPS:
@@ -181,16 +182,20 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
             for cnt in contours:
                 x, y, w, h = cv2.boundingRect(cnt)
                 if not (_MIN_WIDTH < w < _MAX_WIDTH and _MIN_HEIGHT < h < _MAX_HEIGHT):
+                    rejections["size"] += 1
                     continue
                 aspect = w / h if h else 0.0
                 if not (_MIN_ASPECT < aspect < _MAX_ASPECT):
+                    rejections["aspect"] += 1
                     continue
                 patch = gray[y : y + h, x : x + w]
                 var_b = float(np.var(patch)) if patch.size else 0.0
                 if var_b < _MIN_VARIANCE:
+                    rejections["variance"] += 1
                     continue
                 rough = hashlib.md5(patch.tobytes()[:4096]).hexdigest()
                 if rough in rough_seen:
+                    rejections["rough_dup"] += 1
                     continue
                 rough_seen.add(rough)
                 geometry.append(
@@ -241,5 +246,16 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
         if page_kept:
             logs.append(_log("info", f"Check cropper page {page_num}: {page_kept} crop(s)."))
 
+    total_rej = sum(rejections.values())
+    if total_rej:
+        logs.append(
+            _log(
+                "info",
+                f"[DIAG] Cropper rejections this run: {total_rej} "
+                f"(size={rejections['size']}, aspect={rejections['aspect']}, "
+                f"variance={rejections['variance']}, rough_dup={rejections['rough_dup']}). "
+                "Use these counts + SLAM_CROP_* env vars to diagnose 55 vs 56 misses.",
+            )
+        )
     logs.append(_log("info", f"Check cropper extracted {len(all_crops)} unique crop(s)."))
     return all_crops, logs
