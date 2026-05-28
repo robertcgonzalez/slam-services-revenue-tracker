@@ -10,9 +10,9 @@
 
 ## Quick Start
 
-### Recommended: GitHub Codespaces (for heavy OCR / Local Enhanced OCR work)
+### Recommended: GitHub Codespaces (only supported heavy OCR environment)
 
-The heavy Local Enhanced OCR pipeline (EasyOCR + OpenCV check cropper + payee extraction) is painful to set up on a fresh Windows or macOS machine. Codespaces gives you a fully-provisioned Linux container in ~5 minutes.
+The heavy Local Enhanced OCR pipeline (EasyOCR + OpenCV check cropper + payee extraction) is painful to set up on a fresh Windows or macOS machine. GitHub Codespaces (especially the 4-core/16 GB SKU) is the **only supported environment** for speed, consistency, and standardized heavy-OCR validation.
 
 1. GitHub repo → **Code** → **Codespaces** → **Create codespace on main** (prefer the 4-core/16 GB machine type).
 2. Wait for the post-create script (poppler + `.venv` + heavy OCR libs + EasyOCR model pre-warm).
@@ -26,7 +26,40 @@ The heavy Local Enhanced OCR pipeline (EasyOCR + OpenCV check cropper + payee ex
 
 See [docs/local-development.md](docs/local-development.md) for full Codespaces details, aliases (`slam-info`, `slam-lint`, etc.), and DPI tuning.
 
-### Local Windows (light work or full OCR)
+### First-time onboarding for another user (low-friction)
+
+Canonical guide for Laura/Stef/Patty:
+
+- `Scripts/Onboarding-for-Laura-Codespaces.md`
+
+Quick version:
+
+1. Install GitHub CLI, Git, and VS Code.
+2. Authenticate once:
+
+   ```bash
+   gh auth login --scopes codespace
+   ```
+
+3. Optional scripted auth (PAT in local gitignored `.env`):
+
+   ```bash
+   # .env (local only, never committed)
+   SLAM_GH_TOKEN=ghp_xxx...
+   bash Scripts/setup-codespace-auth.sh
+   ```
+
+4. Create/connect to a Codespace and start app:
+
+   ```bash
+   gh cs list
+   gh cs ssh <codespace-name>
+   cd /workspaces/SLAM-Services-Project
+   source .venv/bin/activate
+   slam-run
+   ```
+
+### Local Windows (light work only)
 
 ```powershell
 cd C:\SLAM-Services-Project
@@ -35,7 +68,7 @@ cd C:\SLAM-Services-Project
 streamlit run App/app.py
 ```
 
-For the **🖥️ Local Enhanced OCR (Robert only)** radio you also need the heavy libs + poppler (see [docs/local-development.md](docs/local-development.md)).
+Heavy OCR validation is Codespaces-only; do not use local Windows for Local Enhanced OCR pipeline regression evidence.
 
 ### Health checks
 
@@ -46,9 +79,10 @@ python Scripts/health_check.py --full
 
 ---
 
-## Current Status (May 27, 2026 — Blueprint v2.44.5)
+## Current Status (May 28, 2026 — Blueprint v2.44.10)
 
-- **Development environment**: GitHub Codespaces is now the recommended home for all heavy Local Enhanced OCR work (v2.44). The primary mirroring Codespace is `slam-v2-44-codespaces-migration`.
+- **Development environment**: GitHub Codespaces is the only supported heavy-OCR environment (`.devcontainer/` is retained to provision Codespaces).
+- **G1 Sprint 3.2**: Hybrid CV check leg wired in `App/local_enhanced_ocr.py` (default-off; strict path unchanged). Historical local Docker artifacts remain as record, but future heavy validation guidance is Codespaces-only.
 - **Bank Statements core workflow**: Upload PDF → Lightweight Parser / Local Enhanced OCR (Robert) / Azure OCR (parked) / paste Grok CSV → automated reconciliation → persistent payee rules engine (v2.39) with **💡 Learn this mapping** → Mark as Received.
 - **G1 Hybrid CV Check Leg spike (Phases 0–7)**: Complete and isolated under `Scripts/spike/`. Strong results (7× clean-payee improvement on the hardest PDF). Owner decision B1 (Traditions-first integration sprint) approved. Feature-flagged; EasyOCR strict path remains the production default.
 - **Azure OCR Function**: `slam-ocr-function` (Y1 Consumption) exists but is parked on the v2.41 skeleton pending infra decision. The full v2.43/v2.44.3 intelligent check-linking pipeline is available locally via the in-process `App/local_enhanced_ocr.py`.

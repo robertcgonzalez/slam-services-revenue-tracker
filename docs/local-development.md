@@ -2,7 +2,8 @@
 
 **Purpose**: How to develop and test locally or in GitHub Codespaces, including the recommended heavy-OCR environment and the PostgreSQL path.
 
-**Primary environment for heavy OCR work (v2.44+)**: The GitHub Codespace named `slam-v2-44-codespaces-migration` (or any new Codespace created from the `.devcontainer/` config).
+**Heavy OCR policy**: GitHub Codespaces is the only supported environment for heavy OCR work (4-core/16 GB recommended).  
+**Local Windows scope**: light work only (non-heavy OCR).
 
 ---
 
@@ -10,10 +11,19 @@
 
 | I want to...                              | Recommended Path |
 |-------------------------------------------|------------------|
-| Run the full Local Enhanced OCR pipeline (EasyOCR + check cropper + payee extraction) against real PDFs | **GitHub Codespaces** (4-core/16 GB recommended) |
+| Run the full Local Enhanced OCR pipeline (EasyOCR + check cropper + payee extraction) against real PDFs | **GitHub Codespaces only** (4-core/16 GB recommended). |
+| G1 hybrid CV check leg (cache-backed or live Read) | Same heavy environment; set `SLAM_HYBRID_CV_ENABLED=true` and `check_leg_mode="hybrid_cv"` (see `Scripts/Codespace-Connection-Recipe.md`) |
 | Light work, Dashboard, Revenue Requests, rules engine (no heavy OCR) | Local Windows `.venv` (Python 3.10) or any Codespace |
 | Test PostgreSQL round-trips (edit → save → reload) | Local or Codespace with `.env` + `USE_POSTGRES=true` |
 | Pre-UAT / production smoke test           | `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` |
+
+---
+
+## Retired path note
+
+The local Docker mirror path is retired for heavy OCR. Keep any historical notes for traceability only.  
+Current connection and auth procedures live in [Scripts/Codespace-Connection-Recipe.md](../Scripts/Codespace-Connection-Recipe.md).
+For non-technical first-time setup, use [Scripts/Onboarding-for-Laura-Codespaces.md](../Scripts/Onboarding-for-Laura-Codespaces.md).
 
 ---
 
@@ -64,7 +74,7 @@ VS Code Command Palette → **Codespaces: Rebuild Container** (keeps your uncomm
 
 ---
 
-## Local Windows Development (Python 3.10 .venv)
+## Local Windows Development (Python 3.10 .venv, light work only)
 
 ### First-time or broken venv (recommended)
 
@@ -75,29 +85,20 @@ cd C:\SLAM-Services-Project
 streamlit run App/app.py
 ```
 
-Manual equivalent:
+Manual equivalent for light local development:
 
 ```powershell
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt ruff black
-# For Local Enhanced OCR work only:
-pip install pdfplumber pdf2image easyocr pillow opencv-python-headless numpy
-# Windows-only poppler for pdf2image (one of):
-#   conda install -c conda-forge poppler
-#   winget install --id oschwartz10612.Poppler
-#   Manual: https://github.com/oschwartz10612/poppler-windows/releases
 ruff check App/ Scripts/
 streamlit run App/app.py
 ```
 
-### Local Enhanced OCR (Robert only) — one-time setup
+### Local Enhanced OCR note
 
-The radio button **🖥️ Local Enhanced OCR (Robert only — v2.44.3)** runs a byte-faithful in-process port of the v2.43 Azure pipeline.
-
-It requires the six heavy libraries above. When they are missing the radio gracefully falls back to the Lightweight Parser (pdfplumber only) with a clear warning. Production F1 never has the heavy libs, so Laura is never affected.
-
-See sidebar **🔧 System status** for live capability detection.
+Heavy OCR verification and regression evidence must be produced in Codespaces.  
+Local Windows can still be used for non-heavy app development and general maintenance.
 
 ---
 
