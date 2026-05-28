@@ -1,5 +1,28 @@
 # SLAM Services — Security-First .gitignore
 
+# ==================== PERMANENT: Block Codespaces / Docker / Devcontainers ====================
+# Local Windows ONLY. GitHub Codespaces + any .devcontainer/ definition were fully
+# uninstalled (v2.44.16). These patterns ensure .devcontainer, .devcontainers,
+# Dockerfiles, and compose files can NEVER be reintroduced or accidentally committed.
+# Violating this (re-adding Codespaces/Docker support) requires explicit owner sign-off
+# and a new Constitution amendment. Cursor/VS Code "Add Dev Container Config" will still
+# create files locally, but they will be git-ignored and must be deleted immediately.
+.devcontainer/
+.devcontainers/
+**/.devcontainer/
+**/.devcontainers/
+devcontainer.json
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+docker-compose*.yaml
+.devcontainer.json
+*.devcontainer*
+# Also block common provisioning scripts that recreate remote envs
+postCreateCommand.sh
+onCreateCommand.sh
+updateContentCommand.sh
+
 # ==================== Client Data & Sensitive Files ====================
 Data/
 **/*.csv
