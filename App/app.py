@@ -1370,7 +1370,43 @@ def _render_grok_vision_section(selected_client: str) -> None:
                     f"(`prebuilt-check.us` — no local crop files)."
                 )
             elif cropped_count > 0 and cropped_dir:
-                st.markdown(f"**Cropped checks**: {cropped_count} image(s) in `{cropped_dir}`")
+                checks = st.session_state.get("bank_stmt_cropped_checks") or 0
+                deposits = st.session_state.get("bank_stmt_cropped_deposits") or 0
+                if checks or deposits:
+                    st.markdown(
+                        f"**Cropped images**: {cropped_count} total "
+                        f"({checks} checks + {deposits} deposit slips) in `{cropped_dir}`"
+                    )
+                else:
+                    st.markdown(f"**Cropped checks**: {cropped_count} image(s) in `{cropped_dir}`")
+
+            # Convenience button to re-organize (useful after code changes or on old folders)
+            if cropped_count > 0 and cropped_dir:
+                with st.expander("Organize crops (checks vs deposits)", expanded=False):
+                    st.caption("Moves images into clean `checks/` and `deposits/` subfolders based on current classification rules.")
+                    if st.button("Re-organize now", key="reorg_crops_btn"):
+                        try:
+                            import subprocess
+                            import sys
+                            from pathlib import Path as _P
+                            script = _P(__file__).parent.parent / "Scripts" / "reorganize_cropped_checks.py"
+                            if script.exists():
+                                result = subprocess.run(
+                                    [sys.executable, str(script), "--crop-dir", cropped_dir],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60,
+                                )
+                                if result.returncode == 0:
+                                    st.success("Crops re-organized successfully.")
+                                    st.code(result.stdout or "Done.", language="text")
+                                else:
+                                    st.error("Re-organization had issues.")
+                                    st.code(result.stderr or result.stdout, language="text")
+                            else:
+                                st.warning("Reorganizer script not found.")
+                        except Exception as e:
+                            st.error(f"Failed to run reorganizer: {e}")
 
         prompt_text = build_grok_vision_prompt(
             selected_client,
@@ -2464,6 +2500,13 @@ def _run_bank_statement_azure_process(
             )
             st.session_state["bank_stmt_cropped_count"] = int(
                 last_meta.get("cropped_check_count") or 0
+            )
+            # New breakdown for checks vs deposit slips (available on paid-tier cropping runs)
+            st.session_state["bank_stmt_cropped_checks"] = int(
+                last_meta.get("cropped_likely_checks") or 0
+            )
+            st.session_state["bank_stmt_cropped_deposits"] = int(
+                last_meta.get("cropped_likely_deposits") or 0
             )
             st.session_state["bank_stmt_text_layer"] = bool(
                 last_meta.get("text_layer_found", False)

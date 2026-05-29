@@ -599,6 +599,16 @@ def analyze_checks_from_crop_directory(
         "crop_files_failed": failed,
         "source": "cropped_pngs",
     }
+
+    if failed > 0 and failed == len(png_files):
+        # All crops failed — give a clear top-level message (no EasyOCR fallback is performed)
+        ep = check_status.get("endpoint") or "the configured check reader endpoint"
+        warnings.insert(
+            0,
+            f"All {failed} crop Azure calls failed against {ep}. "
+            "Check network/DNS/firewall access to CONTENTUNDERSTANDING_* or AZURE_DI_CHECK_* variables.",
+        )
+
     if log_event and logger:
         log_event(
             logger,

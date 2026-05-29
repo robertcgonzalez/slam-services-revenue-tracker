@@ -6,6 +6,17 @@
 
 ## Change Log
 
+- **v2.44.18 (June 2026)**: **Imaging Leg stabilization — committed to cropping + per-crop Document Intelligence as primary path.** After extensive iteration on the Azure multi-leg pipeline for bank statements (register pages + imaging pages with photographed checks/deposit slips), the team locked in the following for the paid-tier era:
+  - Geometric cropper v5 (DPI-aware scaling, widened aspect ratios for deposit slips, `likely_deposit_slip`/`likely_check` tagging + persisted JSON sidecars).
+  - Automatic organization of crops into clean `checks/` and `deposits/` subfolders.
+  - `Source` provenance column (`register` vs `check_image_crop`) in all output CSVs.
+  - Prominent UI exposure of the check/deposit breakdown + manual "Re-organize now" button on the Bank Statements page.
+  - New standalone helper `Scripts/reorganize_cropped_checks.py` for re-processing old folders.
+  - Full architectural alignment in `bank_statements.py` and supporting modules so the two-leg DI design (register via prebuilt-bankStatement + imaging via crops + `prebuilt-check.us`) is explicit, logged, and the default.
+  - Deposit slip **images** are now first-class (cropped, tagged, organized) while data extraction from them remains deferred (wishlist for client income stream metrics).
+  - Created focused forward plan: [Docs/Imaging_Leg_Roadmap.md](/Docs/Imaging_Leg_Roadmap.md) covering Phases 2–5 (deposit extraction, Custom Neural model, income metrics, etc.).
+  Work on this facet paused at owner direction once it was deemed maximized for current needs. Full mandatory git validation sequence executed.
+
 - **v2.44.17 (May 28, 2026, patch)**: **Targeted tweaks to Azure multi-leg check pipeline** (the "separate Azure legs" path using geometry cropper v5 + `prebuilt-check.us` per crop + register model). Addressed flaws observed in 2026-05-28T21-16_export.csv run on the hard Traditions PDF: (1) `checks_to_transaction_rows()` now produces clean Description (payee only, no "CHECK #### Payee" duplication) and useful ReviewReason including crop filename provenance; (2) smarter assembly in the Azure DI pipeline (`bank_statements.py`) — only appends supplemental check rows for check numbers absent from the register pass (prevents bloat while still supplying check-only transactions on heavily imaged statements); (3) added rejection diagnostics to `check_cropper_v5.py` (size/aspect/variance/rough_dup counts) so 55-vs-56 misses are diagnosable without changing behavior. All changes are in the experimental Azure check leg; Phase 1 tabular production path untouched. Full git verification sequence executed before any potential staging. 60 LOC net change across three files.
 
 - **v2.44.16 (May 28, 2026)**: **Retired GitHub Codespaces / dev container path — local Windows only.** Deleted `.devcontainer/` (`devcontainer.json`, `Dockerfile`, `postCreateCommand.sh`, README), `docs/codespaces-connection-recipe.md`, `Scripts/Codespace-Connection-Recipe.md`, `Scripts/Onboarding-for-Laura-Codespaces.md`, and `Scripts/setup-codespace-auth.sh`. Removed Codespaces runtime detection and lower DPI defaults from `App/local_enhanced_ocr.py`; removed **☁️ Runtime: GitHub Codespaces** sidebar caption from `App/app.py`. Updated `README.md`, `docs/local-development.md`, `docs/environment-policy.md`, `.vscode/settings.json`, `.cursor/rules/slam-services.mdc`. Existing Codespace `slam-v2.44-codespaces-migration` deleted via `gh codespace delete`. Agents must not document or require Codespaces/Docker for validation.

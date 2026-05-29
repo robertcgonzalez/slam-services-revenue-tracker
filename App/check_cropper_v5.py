@@ -1,9 +1,11 @@
 """Check + deposit slip cropper — OpenCV geometry only (no EasyOCR).
 
-Uses v5 size/aspect bands (400 DPI, height 500–1100) and the two-stage grid dedup
-validated in ``Scripts/spike/diagnose_check_deposit_cropper.py`` (~49 checks + 7
-deposit slips on the Traditions hard PDF). Text on crops comes from Azure
-``prebuilt-check.us``, not local OCR.
+Designed to capture both personal/business checks and deposit slips from statement
+imaging pages for downstream Azure analysis and income stream metrics.
+
+Uses DPI-scaled size/aspect bands + two-stage dedup. Aspect range widened to support
+deposit slips (typically squarer than checks). Text extraction happens via Azure
+Content Understanding / prebuilt-check.us (or equivalent analyzer), never EasyOCR on crops.
 
 Dependencies: ``opencv-python-headless``, ``pdf2image`` (+ Poppler), ``pillow``, ``numpy``.
 """
@@ -18,19 +20,21 @@ from dataclasses import dataclass
 from typing import Any
 
 _DEFAULT_DPI = int(os.environ.get("SLAM_CROP_DPI", "400"))
-_MIN_WIDTH = int(os.environ.get("SLAM_CROP_MIN_WIDTH", "120"))
-_MAX_WIDTH = int(os.environ.get("SLAM_CROP_MAX_WIDTH", "1700"))
-_MIN_HEIGHT = int(os.environ.get("SLAM_CROP_MIN_HEIGHT", "500"))
-_MAX_HEIGHT = int(os.environ.get("SLAM_CROP_MAX_HEIGHT", "1100"))
-_MIN_ASPECT = float(os.environ.get("SLAM_CROP_MIN_ASPECT", "2.0"))
-_MAX_ASPECT = float(os.environ.get("SLAM_CROP_MAX_ASPECT", "3.0"))
+_DPI_SCALE = _DEFAULT_DPI / 300.0   # Base tuning was done around 300 DPI
+
+_MIN_WIDTH = int(os.environ.get("SLAM_CROP_MIN_WIDTH", str(int(120 * _DPI_SCALE))))
+_MAX_WIDTH = int(os.environ.get("SLAM_CROP_MAX_WIDTH", str(int(1700 * _DPI_SCALE))))
+_MIN_HEIGHT = int(os.environ.get("SLAM_CROP_MIN_HEIGHT", str(int(500 * _DPI_SCALE))))
+_MAX_HEIGHT = int(os.environ.get("SLAM_CROP_MAX_HEIGHT", str(int(1100 * _DPI_SCALE))))
+_MIN_ASPECT = float(os.environ.get("SLAM_CROP_MIN_ASPECT", "1.4"))
+_MAX_ASPECT = float(os.environ.get("SLAM_CROP_MAX_ASPECT", "3.2"))
 _CONTRAST = float(os.environ.get("SLAM_CROP_CONTRAST", "3.5"))
 _MAX_CROPS = int(os.environ.get("SLAM_LOCAL_OCR_MAX_CHECKS", "70"))
-# Drop flat blank rectangles (borders / gutters) without OCR.
-_MIN_VARIANCE = float(os.environ.get("SLAM_CROP_MIN_VARIANCE", "120.0"))
+# Drop flat blank rectangles (borders / gutters) without OCR. Scale roughly with area.
+_MIN_VARIANCE = float(os.environ.get("SLAM_CROP_MIN_VARIANCE", str(120.0 * (_DPI_SCALE ** 2))))
 
 _HASH_SIZE = 12
-_MIN_CENTER_DIST = int(os.environ.get("SLAM_CROP_MIN_CENTER_DIST", str(round(45 * _DEFAULT_DPI / 300))))
+_MIN_CENTER_DIST = int(os.environ.get("SLAM_CROP_MIN_CENTER_DIST", str(round(45 * _DPI_SCALE))))
 
 
 @dataclass
@@ -138,6 +142,13 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
             f"Check cropper (geometry, DPI={_DEFAULT_DPI}, pages {span}, max={_MAX_CROPS})…",
         )
     )
+    logs.append(
+        _log(
+            "info",
+            f"Effective thresholds (DPI-scaled): min_size=({_MIN_WIDTH}x{_MIN_HEIGHT}), "
+            f"variance>={_MIN_VARIANCE:.0f}, aspect {_MIN_ASPECT:.1f}-{_MAX_ASPECT:.1f}",
+        )
+    )
 
     pages = convert_from_bytes(pdf_bytes, dpi=_DEFAULT_DPI)
     if not pages:
@@ -228,7 +239,12 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
             buf = io.BytesIO()
             enhanced_pil.save(buf, format="PNG", optimize=True)
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            check_id = f"P{page_idx:02d}C{check_counter:02d}"
+            # Use the real 1-based PDF page number in the ID for clarity (e.g. P05C00 instead of P04C00)
+            check_id = f"P{page_num:02d}C{check_counter:02d}"
+            # Basic heuristic to help future income stream analysis:
+            # Deposit slips tend to be relatively squarer (lower aspect) than personal checks.
+            is_likely_deposit = cand.aspect < 2.1
+
             all_crops.append(
                 {
                     "check_id": check_id,
@@ -238,6 +254,8 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
                     "aspect_ratio": cand.aspect,
                     "image_b64": b64,
                     "notes": "geometry+v5_dedup",
+                    "likely_deposit_slip": is_likely_deposit,
+                    "likely_check": not is_likely_deposit,
                 }
             )
             check_counter += 1
@@ -254,7 +272,8 @@ def crop_pdf_checks(pdf_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
                 f"[DIAG] Cropper rejections this run: {total_rej} "
                 f"(size={rejections['size']}, aspect={rejections['aspect']}, "
                 f"variance={rejections['variance']}, rough_dup={rejections['rough_dup']}). "
-                "Use these counts + SLAM_CROP_* env vars to diagnose 55 vs 56 misses.",
+                f"Effective thresholds at {_DEFAULT_DPI} DPI shown above. "
+                "Set SLAM_CROP_MIN_HEIGHT / SLAM_CROP_MIN_VARIANCE etc. to tune.",
             )
         )
     logs.append(_log("info", f"Check cropper extracted {len(all_crops)} unique crop(s)."))

@@ -106,6 +106,7 @@ GROK_CSV_COLUMNS: tuple[str, ...] = (
     "Confidence",
     "NeedsReview",
     "ReviewReason",
+    "Source",   # register vs check_image_crop provenance (added for imaging leg clarity)
 )
 
 # Minimum columns Grok must produce for us to consider the paste/upload valid.
@@ -874,6 +875,14 @@ def run_check_cropper_only(
         return logs, meta
 
     logs.append(_log("info", "--- Check cropper (geometry: OpenCV, no EasyOCR) ---"))
+    logs.append(
+        _log(
+            "info",
+            "Cropping is the primary strategy for imaging pages (checks + deposit slips). "
+            "Deposit slips are captured and saved (tagged) for future income stream analysis; "
+            "data extraction from them is deferred for now.",
+        )
+    )
     CROPPED_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
     for old_png in CROPPED_CHECKS_DIR.glob("*.png"):
         try:
@@ -895,6 +904,21 @@ def run_check_cropper_only(
             out_path = CROPPED_CHECKS_DIR / f"check_{check_id}.png"
             out_path.write_bytes(base64.b64decode(b64))
             saved += 1
+
+            # Persist classification metadata as sidecar JSON so standalone tools can re-organize later
+            try:
+                meta_path = CROPPED_CHECKS_DIR / f"check_{check_id}.json"
+                crop_meta = {
+                    "check_id": check_id,
+                    "page": crop.get("page"),
+                    "aspect_ratio": crop.get("aspect_ratio"),
+                    "likely_deposit_slip": bool(crop.get("likely_deposit_slip")),
+                    "likely_check": bool(crop.get("likely_check")),
+                    "notes": crop.get("notes"),
+                }
+                meta_path.write_text(json.dumps(crop_meta, indent=2), encoding="utf-8")
+            except Exception:
+                pass  # Non-fatal if JSON sidecar fails
         meta["cropped_dir"] = CROPPED_CHECKS_DIR
         meta["cropped_check_count"] = saved
         meta["cropper_mode"] = "geometry_v5"
@@ -902,6 +926,76 @@ def run_check_cropper_only(
             logs.append(
                 _log("info", f"Cropped {saved} check/deposit image(s) to `{CROPPED_CHECKS_DIR}`.")
             )
+
+            # Deposit slip vs check classification for future income stream metrics
+            deposit_count = sum(1 for c in crop_list if c.get("likely_deposit_slip"))
+            check_count = len(crop_list) - deposit_count
+            meta["cropped_likely_checks"] = check_count
+            meta["cropped_likely_deposits"] = deposit_count
+            logs.append(
+                _log(
+                    "info",
+                    f"Crop breakdown: {check_count} likely checks + {deposit_count} likely deposit slips. "
+                    "Deposit slips are saved with metadata for later income stream analysis (extraction deferred).",
+                )
+            )
+
+            # Separate checks and deposit slips into clean subfolders for easier future review/processing
+            checks_dir = CROPPED_CHECKS_DIR / "checks"
+            deposits_dir = CROPPED_CHECKS_DIR / "deposits"
+            checks_dir.mkdir(exist_ok=True)
+            deposits_dir.mkdir(exist_ok=True)
+
+            moved_checks = 0
+            moved_deposits = 0
+            for crop in crop_list:
+                check_id = str(crop.get("check_id") or "").strip()
+                if not check_id:
+                    continue
+                src = CROPPED_CHECKS_DIR / f"check_{check_id}.png"
+                if not src.exists():
+                    continue
+
+                if crop.get("likely_deposit_slip"):
+                    dst = deposits_dir / f"check_{check_id}.png"
+                    target_dir = deposits_dir
+                    moved_deposits += 1
+                else:
+                    dst = checks_dir / f"check_{check_id}.png"
+                    target_dir = checks_dir
+                    moved_checks += 1
+
+                try:
+                    if dst.exists():
+                        dst.unlink()
+                    src.rename(dst)
+                except Exception:
+                    pass
+
+            if moved_checks or moved_deposits:
+                logs.append(
+                    _log(
+                        "info",
+                        f"Organized crops → {moved_checks} checks in {checks_dir}, "
+                        f"{moved_deposits} deposit slips in {deposits_dir}",
+                    )
+                )
+            else:
+                # Auto-organize even if counts weren't computed this run (defensive)
+                try:
+                    import subprocess
+                    import sys
+                    from pathlib import Path as _Path
+                    script_path = _Path(__file__).parent.parent / "Scripts" / "reorganize_cropped_checks.py"
+                    if script_path.exists():
+                        subprocess.run(
+                            [sys.executable, str(script_path), "--crop-dir", str(CROPPED_CHECKS_DIR)],
+                            check=False,
+                            capture_output=True,
+                            timeout=30,
+                        )
+                except Exception:
+                    pass  # Non-fatal
         else:
             meta["cropper_skipped"] = True
             meta["cropper_user_message"] = CROPPER_SKIP_USER_MSG
@@ -1957,6 +2051,11 @@ def _merge_azure_checks_into_transactions(
         if current and current.lower() not in ("", "uncategorized"):
             continue
         df.at[idx, "Payee"] = payee
+        # Improve provenance when we pull data from a check image crop
+        if "Source" in df.columns:
+            current_source = str(df.at[idx, "Source"] or "").strip()
+            if not current_source or current_source.lower() == "register":
+                df.at[idx, "Source"] = "check_image_crop"
         merged += 1
 
     return df, merged
@@ -2064,14 +2163,28 @@ def _run_azure_ocr_via_document_intelligence(
                 content_understanding_configured,
                 content_understanding_status,
             )
-            from azure_document_intelligence import analyze_checks_from_crop_directory
+            from azure_document_intelligence import (
+                analyze_checks_from_crop_directory,
+                azure_check_reader_status,
+            )
 
+            check_status = azure_check_reader_status()
+            has_dedicated_check_resource = bool(check_status.get("dedicated_resource"))
+
+            # === Paid-tier cropping-first strategy (user decision) ===
+            # Primary path for imaging pages: Geometric crops + per-crop Document Intelligence (`prebuilt-check.us`).
+            # This is the chosen direction for highest extraction quality on photographed checks.
+            #
+            # - Both checks and deposit slips are cropped reliably.
+            # - Deposit slips are cropped + saved with `likely_deposit_slip` metadata for future income stream work.
+            # - We do **not** force deposit slip data extraction through the check model at this time.
+            # - Full-page Content Understanding remains available as a secondary/fallback path only.
             if cropped_n > 0 and meta.get("cropped_dir"):
                 logs.append(
                     _log(
                         "info",
-                        f"Azure check model on {cropped_n} cropped PNG(s) "
-                        f"(`prebuilt-check.us`)…",
+                        f"Document Intelligence check model on {cropped_n} cropped PNG(s) "
+                        f"(`prebuilt-check.us`) — cropping + per-crop analysis (primary path)…",
                     )
                 )
                 checks, check_meta = analyze_checks_from_crop_directory(
@@ -2082,12 +2195,13 @@ def _run_azure_ocr_via_document_intelligence(
                 check_engine = "document_intelligence_crops"
                 meta["check_source"] = "geometry_cropper_plus_di"
             elif content_understanding_configured():
+                # Secondary / fallback path (full-page analysis)
                 check_engine = "content_understanding"
                 logs.append(
                     _log(
                         "info",
-                        f"Content Understanding (`prebuilt-check.us`) — one call per imaging "
-                        f"page ({check_pages})…",
+                        f"Content Understanding (`prebuilt-check.us`) — full imaging page analysis "
+                        f"({check_pages}) [fallback path]…",
                     )
                 )
                 checks, check_meta = cu_analyze_checks_on_imaging_pages(
@@ -2096,9 +2210,6 @@ def _run_azure_ocr_via_document_intelligence(
                     log_event=log_event,
                 )
             else:
-                from azure_document_intelligence import azure_check_reader_status
-
-                check_status = azure_check_reader_status()
                 reader_host = ""
                 if check_status.get("endpoint"):
                     try:
@@ -2107,12 +2218,12 @@ def _run_azure_ocr_via_document_intelligence(
                         reader_host = check_status["endpoint"]
                 reader_note = (
                     f" (resource: {reader_host})"
-                    if check_status.get("dedicated_resource") and reader_host
+                    if has_dedicated_check_resource and reader_host
                     else ""
                 )
                 cu_hint = content_understanding_status().get("hint") or ""
                 cu_note = ""
-                if cu_hint and not check_status.get("dedicated_resource"):
+                if cu_hint and not has_dedicated_check_resource:
                     cu_note = (
                         " For Foundry Content Understanding, set CONTENTUNDERSTANDING_* "
                         "to a *.services.ai.azure.com endpoint."
@@ -2120,8 +2231,8 @@ def _run_azure_ocr_via_document_intelligence(
                 logs.append(
                     _log(
                         "info",
-                        f"Document Intelligence check model — one call per imaging page "
-                        f"({check_pages}){reader_note}.{cu_note}",
+                        f"Document Intelligence check model — full imaging page analysis "
+                        f"({check_pages}){reader_note} [fallback path].{cu_note}",
                     )
                 )
                 checks, check_meta = analyze_checks_on_imaging_pages(
@@ -2158,6 +2269,13 @@ def _run_azure_ocr_via_document_intelligence(
             t for t in check_txns
             if str(t.get("Check#") or "").strip() not in register_check_nums
         ]
+
+        # Add clear provenance so the final CSV shows register vs check-image origin
+        for row in register_txns:
+            row["Source"] = "register"
+        for row in supplemental_check_txns:
+            row["Source"] = "check_image_crop"
+
         combined = register_txns + supplemental_check_txns
         df = _parse_ocr_response_to_df({"transactions": combined})
         df = _dedupe_azure_transactions(df)
@@ -2177,8 +2295,39 @@ def _run_azure_ocr_via_document_intelligence(
             logs.append(_log("ok", meta["message"]))
         for w in di_meta.get("warnings") or []:
             logs.append(_log("warn", f"Azure DI warning: {w}"))
-        for w in check_meta.get("warnings") or []:
-            logs.append(_log("warn", f"Azure check warning: {w}"))
+
+        # Graceful handling for check reader failures (no EasyOCR fallback).
+        # When the dedicated check endpoint (CONTENTUNDERSTANDING_* or AZURE_DI_CHECK_*) is unreachable,
+        # we still deliver the register rows and point the user to the actual cropped images.
+        failed_crops = int(check_meta.get("crop_files_failed") or 0)
+        cropped_count = int(meta.get("cropped_check_count") or 0)
+        cropped_dir = meta.get("cropped_dir")
+
+        if failed_crops > 0:
+            # Summarize instead of spamming one line per crop
+            if failed_crops <= 5:
+                for w in check_meta.get("warnings") or []:
+                    logs.append(_log("warn", f"Azure check warning: {w}"))
+            else:
+                logs.append(
+                    _log(
+                        "warn",
+                        f"Azure check model failed on {failed_crops} of {cropped_count} cropped images "
+                        f"(network / DNS / credential issue with check reader endpoint).",
+                    )
+                )
+
+            if cropped_count > 0 and cropped_dir:
+                logs.append(
+                    _log(
+                        "info",
+                        f"Check/deposit images from this statement are saved here for manual review: {cropped_dir} "
+                        "(useful when on free tier with call limits).",
+                    )
+                )
+        else:
+            for w in check_meta.get("warnings") or []:
+                logs.append(_log("warn", f"Azure check warning: {w}"))
 
         meta["azure_check_meta"] = check_meta
         meta["azure_check_engine"] = check_meta.get("engine") or check_engine
@@ -2200,6 +2349,40 @@ def _run_azure_ocr_via_document_intelligence(
                 f"payee merge on {merged} row(s).",
             )
         )
+
+        # Final imaging leg summary (checks vs deposits)
+        likely_checks = int(meta.get("cropped_likely_checks") or 0)
+        likely_deposits = int(meta.get("cropped_likely_deposits") or 0)
+        logs.append(
+            _log(
+                "info",
+                f"Imaging leg complete: {likely_checks} likely checks + {likely_deposits} deposit slips cropped. "
+                f"{len(checks)} check extractions attempted via Document Intelligence. "
+                "Deposit slip data extraction deferred.",
+            )
+        )
+
+        # Architectural summary for this run (two-leg DI design)
+        logs.append(
+            _log(
+                "info",
+                f"Architecture: Register leg via prebuilt bank statement model | "
+                f"Imaging leg via geometric crops + per-crop Document Intelligence `prebuilt-check.us`. "
+                f"Deposit slips cropped + saved for future processing.",
+            )
+        )
+
+        # Quota context for the user (especially important on free/restricted tiers)
+        if check_meta:
+            calls_made = check_meta.get("per_page_calls") or check_meta.get("crop_files_analyzed") or len(checks) or "?"
+            logs.append(
+                _log(
+                    "info",
+                    f"Check analysis strategy used: {check_engine} "
+                    f"(approx {calls_made} Azure check calls made this run). "
+                    "On free tiers expect partial results — consider a dedicated check resource for full crop coverage.",
+                )
+            )
 
         if logger is not None:
             log_event(

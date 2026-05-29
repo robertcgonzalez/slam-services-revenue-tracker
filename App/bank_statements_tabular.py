@@ -478,6 +478,7 @@ def render_bank_statements_phase1_page(
                         "Confidence",
                         "NeedsReview",
                         "ReviewReason",
+                        "Source",
                     ]
                     if c in res.df.columns
                 ]
