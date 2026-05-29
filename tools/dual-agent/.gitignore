@@ -1,0 +1,13 @@
+# Local environment
+.venv/
+.env
+__pycache__/
+*.pyc
+
+# Session data (can be committed if you want history)
+.dual-agent-sessions/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
