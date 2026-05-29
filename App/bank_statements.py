@@ -824,6 +824,42 @@ def _log(level: str, message: str) -> str:
     return f"[{level.upper()}] {message}"
 
 
+def _poppler_available() -> tuple[bool, str]:
+    import shutil
+
+    if shutil.which("pdftoppm"):
+        return True, ""
+    return False, "poppler (pdftoppm) not on PATH"
+
+
+def geometry_imaging_deps_status() -> dict[str, Any]:
+    """OpenCV + pdf2image + Poppler readiness (geometry cropper v5 — no EasyOCR)."""
+    caps: dict[str, bool] = {}
+    missing: list[str] = []
+    for name, mod in (
+        ("opencv", "cv2"),
+        ("pdf2image", "pdf2image"),
+        ("pillow", "PIL"),
+        ("numpy", "numpy"),
+    ):
+        try:
+            __import__(mod)
+            caps[name] = True
+        except ImportError:
+            caps[name] = False
+            missing.append(name)
+    poppler_ok, poppler_reason = _poppler_available()
+    caps["poppler"] = poppler_ok
+    if not poppler_ok:
+        missing.append("poppler")
+    return {
+        "capabilities": caps,
+        "missing": missing,
+        "ready": not missing,
+        "poppler_reason": poppler_reason,
+    }
+
+
 def cropper_available() -> tuple[bool, str]:
     """Optional check cropper — never required for transaction extraction."""
 
@@ -837,6 +873,15 @@ def cropper_available() -> tuple[bool, str]:
 
     except ImportError:
         return False, "opencv (cv2) not installed in this Python environment"
+
+    try:
+        import pdf2image  # noqa: F401
+    except ImportError:
+        return False, "pdf2image not installed in this Python environment"
+
+    poppler_ok, poppler_reason = _poppler_available()
+    if not poppler_ok:
+        return False, poppler_reason
 
     return True, ""
 
@@ -2150,7 +2195,7 @@ def _run_azure_ocr_via_document_intelligence(
         meta["cropped_check_count"] = int(crop_meta.get("cropped_check_count") or 0)
         meta["cropper_mode"] = crop_meta.get("cropper_mode")
 
-        check_pages = imaging_pages_string()
+        check_pages = imaging_pages_string(pdf_bytes)
         checks: list[dict[str, Any]] = []
         check_meta: dict[str, Any] = {}
         check_engine = "document_intelligence"
@@ -2955,6 +3000,7 @@ def hybrid_cv_status() -> dict[str, Any]:
         except ImportError:
             return False
 
+    imaging_deps = geometry_imaging_deps_status()
     try:
         from azure_document_intelligence import imaging_pages_string
 
@@ -2982,6 +3028,10 @@ def hybrid_cv_status() -> dict[str, Any]:
         "imaging_first_page": int(first_page),
         "imaging_last_page": int(last_page) if isinstance(last_page, int) else None,
         "check_pages": check_pages,
+        "check_pages_note": "Clamped per PDF at Process Statement time when shorter than env range.",
+        "geometry_imaging_deps": imaging_deps["capabilities"],
+        "geometry_imaging_ready": imaging_deps["ready"],
+        "geometry_imaging_missing": imaging_deps["missing"],
         "di_endpoint": di_ep,
         "check_model": "prebuilt-check.us",
         "check_leg": check_leg,

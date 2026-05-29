@@ -27,22 +27,70 @@ cd C:\SLAM-Services-Project
 
 What it does (idempotent & safe):
 
-1. Pre-flight checks (login, web app exists, zip exists).
-2. Removes `WEBSITE_RUN_FROM_PACKAGE` if present (silent killer of OneDeploy uploads).
-3. **`az webapp stop`** — releases Kudu and clears any stuck deploy lock.
-4. **`az webapp deploy --type zip --async true`** — returns immediately.
-5. Server-side polling of `az webapp deployment list` until terminal status (0 Success / 3 Failed / 5 Partial).
-6. **`az webapp start`** + HTTP smoke test against the live URL.
+1. Pre-flight checks (login, web app exists, zip root entries in local `slam-app.zip`).
+2. Sets **`COMPRESS_DESTINATION_DIR=false`** (Python Oryx may still compress — see below).
+3. Removes `WEBSITE_RUN_FROM_PACKAGE` if present (silent killer of OneDeploy uploads).
+4. Restarts Kudu (scm) so Oryx sees updated app settings.
+5. **`-CleanDeploy`**: removes stale `output.tar.zst` / `oryx-manifest.toml` on wwwroot (preserves `Data/`).
+6. **`az webapp stop`** — releases Kudu and clears any stuck deploy lock.
+7. **`az webapp deploy --type zip --async true --track-status false`** — CLI returns after upload; script polls Kudu deployment status separately (`-CleanDeploy` adds `--clean true`).
+8. **Guarantee step** — retries until `startup.sh`, `runtime.txt`, and `apt.txt` exist and `startup.sh` is executable: VFS seed from repo + extract from `output.tar.zst` when Oryx compressed the build. **Deploy fails (exit 1) if this step does not succeed.**
+9. **`az webapp start`** + HTTP smoke test (detects the Oryx “Hey, Python developers!” placeholder page).
 
 Zip root layout (enforced by the build script):
 ```
 requirements.txt
 runtime.txt
 startup.sh
+apt.txt
 pyproject.toml
 App/
 Scripts/
 ```
+
+### Why root files disappear after a “successful” deploy (May 2026 root cause)
+
+With `SCM_DO_BUILD_DURING_DEPLOYMENT=true`, **Python Oryx often compresses the entire build** into `output.tar.zst` at wwwroot and writes `oryx-manifest.toml` with `CompressDestinationDir="true"`.
+
+`COMPRESS_DESTINATION_DIR=false` is set by `Deploy-ToAzure.ps1`, but **Oryx documents that setting for Node.js**; on Python 3.10 it is frequently **ignored**, so Kudu `ls /home/site/wwwroot` shows only `output.tar.zst`, `requirements.txt`, and `oryx-manifest.toml` — **not** `startup.sh`, `runtime.txt`, or `apt.txt` at the root. The platform then serves the default **“Hey, Python developers!”** placeholder because there is no executable `startup.sh` at wwwroot.
+
+The three files **are inside** `output.tar.zst` (paths `./startup.sh`, `./runtime.txt`, `./apt.txt`). The deploy script now **always** guarantees they land at wwwroot after Oryx finishes (VFS upload from the repo + selective `tar` extract from the zst archive).
+
+Manual verification:
+
+```powershell
+.\Scripts\PowerShell\Verify-AzureWwwRoot.ps1
+```
+
+Kudu evidence (healthy wwwroot root):
+
+```bash
+ls -la /home/site/wwwroot/startup.sh /home/site/wwwroot/runtime.txt /home/site/wwwroot/apt.txt
+```
+
+### Manual recovery (if wwwroot root files are missing)
+
+Run from the repo (app can stay running; idempotent):
+
+```powershell
+.\Scripts\PowerShell\Deploy-ToAzure.ps1 -SkipDeploy -SkipSmokeTest
+# Re-seeds/extracts wwwroot startup files without uploading a new zip.
+```
+
+Or extract from the Oryx archive in Kudu (one command per line in the debug console):
+
+```bash
+cd /home/site/wwwroot
+zstd -d -f output.tar.zst -o /tmp/oryx-flat.tar
+tar -xf /tmp/oryx-flat.tar ./startup.sh ./runtime.txt ./apt.txt
+chmod +x startup.sh
+ls -la startup.sh runtime.txt apt.txt
+az webapp restart -g SLAM-Services-RG -n slam-services-revenue-tracker
+```
+
+### Build zip hygiene (reduces Oryx tarball size)
+
+`Build-AzureDeployZip.ps1` excludes `__pycache__`, `Scripts/spike/`, test PDFs under `Scripts/_streamlit_bank_uploads/`, and uses forward-slash zip entries (not `Compress-Archive`). A typical code-only zip is ~0.25 MB instead of multi‑MB with accidental local artifacts.
 
 ---
 
@@ -153,6 +201,8 @@ Then re-run the modern deploy:
 | `USE_POSTGRES`            | `true` when Azure PostgreSQL is active |
 | `DATABASE_URL` or `POSTGRES_*` | PostgreSQL connection (never commit) |
 | `POSTGRES_SSLMODE`        | Usually `require` for `*.postgres.database.azure.com` |
+| `COMPRESS_DESTINATION_DIR` | Must be `false` for flat wwwroot startup files (set automatically by `Deploy-ToAzure.ps1`) |
+| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` — Oryx installs Python deps and processes `apt.txt` (Poppler) at deploy time |
 
 See `Scripts/PowerShell/Set-AzurePostgresAppSettings.ps1` for a helper that configures the Postgres-related settings.
 
@@ -172,16 +222,102 @@ Live URL: https://slam-services-revenue-tracker.azurewebsites.net/
 
 ---
 
+## Managing the Azure Startup Command (Critical for Streamlit Apps)
+
+**Production must use:** `appCommandLine` = **`./startup.sh`**. If it is empty while `output.tar.zst` exists, visitors see the **“Hey, Python developers!”** placeholder (Streamlit never starts).
+
+```powershell
+.\Scripts\PowerShell\Set-AzureStartupCommand.ps1
+```
+
+`Deploy-ToAzure.ps1` applies this after each deploy. A raw `streamlit run ...` startup command bypasses `startup.sh` and often causes 503 on cold start — do not use that.
+
+### Login flow (two steps)
+
+1. **Microsoft sign-in** (Easy Auth on the App Service) — work/school account in the allowed tenant.
+2. **SLAM app password** (Streamlit “Enter Password” screen) — value from the `SLAM_APP_PASSWORD` App Setting (ask Robert if you do not have it).
+
+Hard-refresh (Ctrl+F5) or an incognito window if you still see the Python placeholder after a fix.
+
+### Recovering from Application Error / Startup Command Override
+
+**Symptoms (May 2026 incident)**:
+- Live URL shows generic **503 Application Error** (sad face) on cold starts.
+- Container logs show `Site's appCommandLine: python -m streamlit run App/app.py ...`
+- Warmup probe fails after ~23s while the app takes 31–40s+ to become ready.
+- `startup.sh` (poppler handling, health checks, pip skip) is ignored.
+
+**Symptom progression after fix**: **503 Application Error** → **401** (Easy Auth login redirect — expected and correct).
+
+#### One-command recovery (preferred)
+
+```powershell
+.\Scripts\PowerShell\Clear-AzureStartupCommand.ps1
+```
+
+This script inspects `appCommandLine`, clears it via REST (reliable), recycles the container, and smoke-tests the live URL.
+
+#### Manual recovery (exact commands from Phase 1 automated run, 2026-05-29)
+
+1. Inspect:
+
+```powershell
+az webapp config show -g SLAM-Services-RG -n slam-services-revenue-tracker --query "appCommandLine"
+```
+
+2. Clear via REST (CLI `--startup-file ""` often does **not** stick):
+
+```powershell
+$SUB = az account show --query id -o tsv
+az rest --method PATCH `
+  --uri "https://management.azure.com/subscriptions/$SUB/resourceGroups/SLAM-Services-RG/providers/Microsoft.Web/sites/slam-services-revenue-tracker/config/web?api-version=2022-03-01" `
+  --body '{"properties":{"appCommandLine":""}}'
+```
+
+3. Verify clear:
+
+```powershell
+az webapp config show -g SLAM-Services-RG -n slam-services-revenue-tracker --query "appCommandLine"
+# Expected: empty string or null
+```
+
+4. Recycle + smoke test:
+
+```powershell
+az webapp stop -g SLAM-Services-RG -n slam-services-revenue-tracker
+az webapp start -g SLAM-Services-RG -n slam-services-revenue-tracker
+# Wait 45-90s, then:
+curl -sS -o /dev/null -w "HTTP %{http_code}\n" -L --max-time 120 "https://slam-services-revenue-tracker.azurewebsites.net/"
+# Expected: HTTP 401 (Easy Auth) or 2xx — NOT 503
+```
+
+5. Full project health checks:
+
+```powershell
+.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure
+python Scripts/health_check.py --full
+```
+
+### Prevention & Future Runs
+- Prefer leaving the Startup Command **empty** in the Azure portal / config so the deployed `startup.sh` is honored by Oryx.
+- After any deploy that touches `startup.sh`, always do a full container recycle + smoke test.
+- `startup.sh` skips pip when Oryx antenv already has packages and uses a faster production path when `WEBSITE_HOSTNAME` is set.
+- See `docs/handoffs/azure-startup-fix-phase*.md` for the incident timeline and dual-agent handoff pattern.
+
+---
+
 ## Related Scripts
 
 - `Scripts/PowerShell/Build-AzureDeployZip.ps1` — produces the flat `slam-app.zip`
 - `Scripts/PowerShell/Deploy-ToAzure.ps1` — the modern safe deploy orchestrator
+- `Scripts/PowerShell/Verify-AzureWwwRoot.ps1` — post-deploy Kudu check for root startup files
+- `Scripts/PowerShell/Clear-AzureStartupCommand.ps1` — reliable REST clear + recycle for startup command drift
 - `Scripts/PowerShell/Deploy-PostgresProduction.ps1` — wrapper that calls the above + Postgres settings
 - `Scripts/PowerShell/Sync-DataRefresh.ps1` — push local CSV changes into the live Postgres instance
 
 ---
 
-**Last major update to this guide**: Extracted from README during 2026-05-27 documentation TLC pass. All historical rationale lives in the Blueprint Change Log (v2.38.3, v2.44.x deployment notes).
+**Last major update to this guide**: 2026-05-29 — Python Oryx `output.tar.zst` root-cause, deploy guarantee step, build zip exclusions. Earlier history in Blueprint Change Log (v2.38.3, v2.44.x deployment notes).
 
 ---
 
@@ -234,6 +370,7 @@ The Bank Statements page immediately falls back to the lightweight parser + Grok
 Use the enhanced health checks (see "Health & Smoke Checks" above plus the DI-specific probes added in the go-live pass). Always run a full regression on at least two hard scanned statements (e.g., `Auto_Body_Center_Jan_26_Statement.pdf`) before declaring the path ready for Laura's daily driver.
 
 ### Related Artifacts
+- **Execution transcript**: `docs/go-live-execution-runbook.md` (2026-05-29 session — partial go-live; check-leg blockers documented)
 - Setter: `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1`
 - Local equivalent (for Robert): `Scripts/PowerShell/Set-LocalAzureBankStatementEnv.ps1`
 - Implementation: `App/azure_document_intelligence.py`, `App/azure_di_utils.py`, `App/bank_statements_tabular.py`

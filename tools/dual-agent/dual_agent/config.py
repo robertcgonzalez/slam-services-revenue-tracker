@@ -11,7 +11,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DualAgentSettings(BaseSettings):
-    """Runtime configuration loaded from environment + .env file."""
+    """Runtime configuration loaded from environment + .env file.
+
+    Searches multiple locations so both global installs and local project runs work:
+    - Current working directory (normal case)
+    - The directory containing this package (for global tool installs)
+    - ~/.grok/tools/dual-agent (common global location)
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",

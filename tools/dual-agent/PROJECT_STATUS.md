@@ -1,7 +1,7 @@
 # Dual-Agent — Project Status, Roadmap & Recommendations
 
 **Date**: 2026-05 (Current)
-**Status**: Phase 1 + Phase 2 Complete (Core Tool + Templates)
+**Status**: Phase 1 + Phase 2 + Hardening Complete (Single source of truth + robust Cursor handoff + live doctor validation)
 **Owner**: Built for SLAM Services project by Grok (xAI) in collaboration with user
 
 ---
@@ -41,12 +41,17 @@
 
 ## Current Capabilities (as of this commit)
 
+**Major June 2026 refresh**: The source tree in `tools/dual-agent/` is now the single source of truth. Global installs are snapshots that should be refreshed after source changes via `install-global.ps1`.
+
+- Robust Cursor handoff with reliable text extraction (`wait()` + multiple fallbacks), agent resumption via IDs, and rich diagnostics per turn.
+- `dual-agent doctor` now performs a **live Cursor agent creation test** (the #1 source of previous "it doesn't work" reports) when a valid key is present.
+- All collaboration modes correctly receive relationship prompts on the first turn.
+- Windows 3.10/3.14 bridge shims + encoding robustness preserved.
 - Run structured, multi-turn autonomous collaborations between Grok and Cursor agents
 - Use high-signal templates tailored to SLAM Services work (payee extraction, OCR/CV pipelines, spike-to-prod migrations, etc.)
-- Global `dual-agent` command available in every PowerShell session
-- `dual-agent doctor` for environment validation
-- `dual-agent templates` for discovering project-specific prompts
-- Solid Windows support (with some remaining Rich encoding considerations)
+- Global `dual-agent` command available in every PowerShell session (refresh after source edits)
+- `dual-agent doctor` + `dual-agent templates` fully functional
+- Solid Windows support (hardened venv recommended via the Invoke-DualAgentHandoff.ps1 wrapper)
 
 **This successfully eliminates manual copy-paste loops** between the two agents for scoped tasks.
 

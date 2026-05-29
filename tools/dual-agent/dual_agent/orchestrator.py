@@ -80,6 +80,7 @@ class DualAgentOrchestrator:
                     cursor_resp = self.cursor.send(
                         prompt,
                         system_addendum=relationship if turn == 1 else None,
+                        preferred_agent_id=self.session.cursor_agent_id,
                     )
 
                     self.session.add_turn("cursor", prompt, cursor_resp.text, {"agent_id": cursor_resp.agent_id})
@@ -114,7 +115,7 @@ class DualAgentOrchestrator:
                         # Grok speaks first in freeform/critic modes
                         prompt = self._build_grok_prompt(task, turn)
                         self.console.print("[bold green]Grok[/bold green]")
-                        grok_resp = self.grok.send(prompt, session_id=grok_sid)
+                        grok_resp = self.grok.send(prompt, session_id=grok_sid, system_addendum=relationship if turn == 1 else None)
                         grok_sid = grok_resp.session_id or grok_sid
                         self.session.grok_session_id = grok_sid
                         self.session.add_turn("grok", prompt, grok_resp.text)
@@ -125,7 +126,11 @@ class DualAgentOrchestrator:
                     # Cursor responds
                     cursor_prompt = self._build_cursor_prompt(task, turn)
                     self.console.print("[bold magenta]Cursor[/bold magenta]")
-                    cursor_resp = self.cursor.send(cursor_prompt)
+                    cursor_resp = self.cursor.send(
+                        cursor_prompt,
+                        system_addendum=relationship if turn == 1 else None,
+                        preferred_agent_id=self.session.cursor_agent_id,
+                    )
                     self.session.add_turn("cursor", cursor_prompt, cursor_resp.text, {"agent_id": cursor_resp.agent_id})
                     self.session.cursor_agent_id = cursor_resp.agent_id or self.session.cursor_agent_id
                     self._render_response("Cursor", cursor_resp.text)

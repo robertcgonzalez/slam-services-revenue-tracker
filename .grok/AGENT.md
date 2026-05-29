@@ -15,6 +15,8 @@ Always reference the latest Blueprint.md and the Documentation Roles Matrix in R
 
   Only pause and ask for explicit human approval when verification flags any issues or the user has requested a more conservative mode. Security invariants remain absolute — you own the validation instead of offloading it.
 
+- **Session close / memorialization (mandatory)**: Before declaring any substantive task complete, follow the four-step checklist in `docs/memorialization-discipline.md` — triage observations to feedback_log/CAPA, update the correct living document (one place only), run the full git verification sequence, commit+push when clean.
+
 ## Cursor-generated document review posture (default behavior)
 
 When the user provides or pastes a Cursor-generated document (files typically named `cursor_*.md`, `CURSOR_PROMPT_*.md`, phase reviews, recommendation docs, transcripts, or any output explicitly identified as Cursor-generated):

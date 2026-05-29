@@ -371,7 +371,13 @@ def _extract_checks_from_analyze_result(result: Any) -> list[dict[str, Any]]:
     return [c for c in checks if c.get("check_number") or c.get("pay_to")]
 
 
-def _imaging_page_range_1based() -> tuple[int, int]:
+def _pdf_page_count(pdf_bytes: bytes) -> int:
+    from azure_di_utils import count_original_pages
+
+    return count_original_pages(pdf_bytes)
+
+
+def _imaging_page_range_1based(pdf_bytes: bytes | None = None) -> tuple[int, int]:
     try:
         from hybrid_cv_check_leg import imaging_page_range
 
@@ -380,13 +386,42 @@ def _imaging_page_range_1based() -> tuple[int, int]:
         first, last = 5, 9
     if not isinstance(last, int):
         last = first
-    return int(first), int(last)
+    first_i, last_i = int(first), int(last)
+
+    if pdf_bytes:
+        page_count = _pdf_page_count(pdf_bytes)
+        if first_i > page_count:
+            return first_i, 0  # signal: no valid imaging pages
+        last_i = min(last_i, page_count)
+    return first_i, last_i
 
 
-def _imaging_page_indices_0based() -> set[int]:
+def _imaging_range_meta(pdf_bytes: bytes) -> dict[str, Any]:
+    """Env range vs clamped range for logs/UI."""
+    try:
+        from hybrid_cv_check_leg import imaging_page_range
+
+        env_first, env_last = imaging_page_range()
+    except Exception:
+        env_first, env_last = 5, 9
+    page_count = _pdf_page_count(pdf_bytes)
+    first, last = _imaging_page_range_1based(pdf_bytes)
+    return {
+        "page_count": page_count,
+        "env_first_page": int(env_first),
+        "env_last_page": int(env_last) if isinstance(env_last, int) else int(env_first),
+        "clamped_first_page": first,
+        "clamped_last_page": last,
+        "imaging_skipped": last < first,
+    }
+
+
+def _imaging_page_indices_0based(pdf_bytes: bytes | None = None) -> set[int]:
     """0-based PDF page indices for check-image pages (excluded from bank-statement model)."""
 
-    first, last = _imaging_page_range_1based()
+    first, last = _imaging_page_range_1based(pdf_bytes)
+    if last < first:
+        return set()
     return set(range(first - 1, last))
 
 
@@ -398,7 +433,7 @@ def register_pages_string_for_bank_statement(pdf_bytes: bytes) -> tuple[str, dic
         pages_list_to_azure_string,
     )
 
-    imaging_idx = _imaging_page_indices_0based()
+    imaging_idx = _imaging_page_indices_0based(pdf_bytes)
     kept, decisions = get_pages_to_analyze(pdf_bytes)
     register_idx = [p for p in kept if p not in imaging_idx]
     pages_str = pages_list_to_azure_string(register_idx)
@@ -628,7 +663,23 @@ def analyze_checks_on_imaging_pages(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Call ``prebuilt-check.us`` once per imaging page (multiple checks per page)."""
 
-    first, last = _imaging_page_range_1based()
+    range_meta = _imaging_range_meta(pdf_bytes)
+    first, last = range_meta["clamped_first_page"], range_meta["clamped_last_page"]
+    if range_meta["imaging_skipped"]:
+        msg = (
+            f"Imaging pages skipped: SLAM_IMAGING_FIRST_PAGE={range_meta['env_first_page']} "
+            f"exceeds document page count ({range_meta['page_count']})."
+        )
+        if log_event and logger:
+            log_event(logger, "bank_stmt_azure_check_imaging_skipped", **range_meta)
+        return [], {
+            "model": _check_model_id(),
+            "pages_analyzed": "",
+            "warnings": [msg],
+            "check_count": 0,
+            "imaging_range": range_meta,
+        }
+
     all_checks: list[dict[str, Any]] = []
     total_duration = 0.0
     warnings: list[str] = []
@@ -656,6 +707,7 @@ def analyze_checks_on_imaging_pages(
         "warnings": warnings,
         "engine": "azure_document_intelligence",
         "per_page_calls": len(pages_called),
+        "imaging_range": range_meta,
     }
     if log_event and logger:
         log_event(
@@ -728,10 +780,15 @@ def checks_to_transaction_rows(checks: list[dict[str, Any]]) -> list[dict[str, s
     return rows
 
 
-def imaging_pages_string() -> str:
+def imaging_pages_string(pdf_bytes: bytes | None = None) -> str:
     """1-based page span for check imaging (env ``SLAM_IMAGING_*``)."""
 
-    first, last = _imaging_page_range_1based()
+    first, last = _imaging_page_range_1based(pdf_bytes)
+    if last < first:
+        if pdf_bytes:
+            pc = _pdf_page_count(pdf_bytes)
+            return f"{first}-{last} (skipped: doc has {pc} page(s))"
+        return f"{first}+ (no doc)"
     return f"{first}-{last}"
 
 

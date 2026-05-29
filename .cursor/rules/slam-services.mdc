@@ -40,6 +40,8 @@ When the user issues a prompt or task to Cursor:
 
   Only pause and ask for explicit human approval when verification flags any issues or the user has requested a more conservative mode. Security invariants remain absolute — you own the validation instead of offloading it.
 
+- **Session close / memorialization (mandatory)**: Before declaring any substantive task complete, follow the four-step checklist in `docs/memorialization-discipline.md` — triage observations to feedback_log/CAPA, update the correct living document (one place only), run the full git verification sequence, commit+push when clean.
+
 ## Single source of truth & living documents
 
 - **`SLAM Services - Digital Transformation Blueprint.md`** — living document; read before substantive work.

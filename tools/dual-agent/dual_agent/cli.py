@@ -9,6 +9,19 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+# Windows console encoding robustness (prevents UnicodeEncodeError with rich on cp1252)
+# Especially important for long Cursor responses containing arrows, emojis, etc.
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        # Fallback for very old Python / environments
+        import os
+        os.environ["PYTHONIOENCODING"] = "utf-8"
+        os.environ["PYTHONLEGACYWINDOWSSTDIO"] = "1"
+
 from .config import DualAgentSettings, CollaborationMode
 from .orchestrator import DualAgentOrchestrator
 from .session import CollaborationSession
@@ -157,11 +170,18 @@ def doctor() -> None:
     settings = _load_settings()
     ok = True
 
-    # Check Cursor key
-    if settings.cursor_api_key and settings.cursor_api_key.startswith("cur_"):
+    # Check Cursor key (support both user keys and team/service account keys)
+    valid_prefixes = ("cur_", "crsr_")
+    if settings.cursor_api_key and settings.cursor_api_key.startswith(valid_prefixes):
         console.print("[green][OK][/green] CURSOR_API_KEY looks valid")
+        key_ok = True
     else:
         console.print("[red][FAIL][/red] CURSOR_API_KEY is missing or invalid in .env")
+        console.print("[dim]   Get one at: https://cursor.com/dashboard/integrations")
+        console.print("[dim]   Then add CURSOR_API_KEY=cur_... (or crsr_...) to .env")
+        console.print("[dim]   (in project root, tools/dual-agent/.env, or ~/.grok/tools/dual-agent/.env)[/dim]")
+        console.print("[dim]   (Real Cursor agent creation test will be skipped)[/dim]")
+        key_ok = False
         ok = False
 
     # Check grok CLI
@@ -196,10 +216,43 @@ def doctor() -> None:
         ok = False
 
     console.print()
-    if ok:
-        console.print("[bold green]Environment looks good. You should be able to run collaborations.[/bold green]")
+
+    # Real Cursor agent creation test (the actual handoff) — only if we have a key
+    if key_ok:
+        console.print("[bold]Testing actual Cursor handoff (creating a short-lived agent)...[/bold]")
+        try:
+            from .cursor_client import CursorClient
+
+            test_client = CursorClient(settings, console=console)
+            test_client.ensure_agent()
+
+            if test_client.agent_id:
+                console.print(f"[green][OK][/green] Successfully created Cursor agent: [cyan]{test_client.agent_id}[/cyan]")
+                test_client.close()
+            else:
+                console.print("[yellow][WARN][/yellow] Cursor agent was created but no agent_id was returned")
+                ok = False
+        except Exception as e:
+            console.print(f"[red][FAIL][/red] Cursor handoff test failed: {e}")
+            console.print("[dim]This is the most common cause of 'handoff feature did not work'.[/dim]")
+            ok = False
     else:
+        console.print("[dim]Skipping live Cursor agent creation test (no valid CURSOR_API_KEY)[/dim]")
+
+    console.print()
+    if ok:
+        console.print("[bold green]Environment looks good. Autonomous Grok ↔ Cursor handoff should work.[/bold green]")
+    else:
+        console.print("[bold red]Problems detected. Fix the issues above before running real collaborations.[/bold red]")
         console.print("[bold red]Some checks failed. Fix the issues above before running dual-agent.[/bold red]")
+
+    # Platform guidance for the known Windows + Python 3.14 bridge issues
+    import sys
+    if sys.version_info >= (3, 12):
+        console.print()
+        console.print("[yellow]Note: You are running on Python >= 3.12.[/yellow]")
+        console.print("[yellow]For SLAM Services work, the strongly recommended path is the project's hardened Python 3.10 venv:[/yellow]")
+        console.print("[yellow]  .\\Scripts\\PowerShell\\Invoke-DualAgentHandoff.ps1 -Directive \"docs/handoffs/xxx.md\"[/yellow]")
 
 
 @app.command("templates")
@@ -217,7 +270,7 @@ def list_templates(
     ]
     templates_dir = next((c for c in candidates if c.exists()), None)
 
-    if not templates_dir.exists():
+    if not templates_dir or not templates_dir.exists():
         console.print("[yellow]No templates directory found.[/yellow]")
         return
 

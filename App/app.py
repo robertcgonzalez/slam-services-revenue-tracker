@@ -183,7 +183,13 @@ except ImportError:
         transaction_summary_metrics,
     )
 from data_paths import render_data_path_error, resolve_data_path
-from diagnostics import get_app_info, get_app_user, get_data_freshness, get_operational_hints
+from diagnostics import (
+    get_app_info,
+    get_app_user,
+    get_data_freshness,
+    get_operational_hints,
+    get_qms_status,
+)
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
@@ -477,26 +483,26 @@ def _load_clients_db() -> pd.DataFrame:
     try:
         with get_session() as session:
             rows = session.query(Client).filter(Client.is_deleted.is_(False)).all()
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame(
+                [
+                    {
+                        "Business Name": r.business_name,
+                        "EIN": r.ein or "",
+                        "Entity Type": r.entity_type or "",
+                        "City State Zip": r.address or "",
+                        "industry_category": r.industry_type or "Other",
+                    }
+                    for r in rows
+                ]
+            )
     except Exception as exc:
         raise DataLoadError(
             "We couldn't load clients from the database. "
             "Try refreshing the page — if this continues, contact Robert."
             f" ({friendly_db_error(exc)})"
         ) from exc
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(
-        [
-            {
-                "Business Name": r.business_name,
-                "EIN": r.ein or "",
-                "Entity Type": r.entity_type or "",
-                "City State Zip": r.address or "",
-                "industry_category": r.industry_type or "Other",
-            }
-            for r in rows
-        ]
-    )
 
 
 @st.cache_data(ttl=60)
@@ -562,32 +568,32 @@ def _load_requests_db() -> pd.DataFrame:
                 .filter(RevenueRequest.is_deleted.is_(False))
                 .all()
             )
+            if not rows:
+                return pd.DataFrame()
+            records = []
+            for req, business_name in rows:
+                records.append(
+                    {
+                        "request_id": str(req.request_id),
+                        "business_name": business_name or "",
+                        "request_type": req.request_type or "",
+                        "period": req.period or "",
+                        "status": req.status or "Pending",
+                        "amount_due": float(req.amount_due or 0),
+                        "due_date": req.due_date.isoformat() if req.due_date else "",
+                        "received_date": req.received_date.isoformat() if req.received_date else "",
+                        "notes": req.notes or "",
+                        "bank_statement_received": bool(req.bank_statement_received),
+                        "sales_report_received": bool(req.sales_report_received),
+                    }
+                )
+            return pd.DataFrame(records)
     except Exception as exc:
         raise DataLoadError(
             "We couldn't load revenue requests from the database. "
             "Try refreshing the page — if this continues, contact Robert."
             f" ({friendly_db_error(exc)})"
         ) from exc
-    if not rows:
-        return pd.DataFrame()
-    records = []
-    for req, business_name in rows:
-        records.append(
-            {
-                "request_id": str(req.request_id),
-                "business_name": business_name or "",
-                "request_type": req.request_type or "",
-                "period": req.period or "",
-                "status": req.status or "Pending",
-                "amount_due": float(req.amount_due or 0),
-                "due_date": req.due_date.isoformat() if req.due_date else "",
-                "received_date": req.received_date.isoformat() if req.received_date else "",
-                "notes": req.notes or "",
-                "bank_statement_received": bool(req.bank_statement_received),
-                "sales_report_received": bool(req.sales_report_received),
-            }
-        )
-    return pd.DataFrame(records)
 
 
 @st.cache_data(ttl=60)
@@ -2726,6 +2732,22 @@ def render_sidebar_extras(
 
         for hint in get_operational_hints(data_source=DATA_SOURCE, db_health=DB_HEALTH):
             st.caption(f"• {hint}")
+
+        qms = get_qms_status(data_path=DATA_PATH)
+        if qms["summary"] == "healthy":
+            st.caption("📋 QMS baseline: **healthy** ✅")
+        else:
+            st.caption("📋 QMS baseline: **watch** ⚠️")
+        if qms["last_state_alignment"]:
+            st.caption(f"  ↳ Last State Alignment: `{qms['last_state_alignment']}`")
+        if qms["last_management_review"]:
+            st.caption(f"  ↳ Last Management Review: `{qms['last_management_review']}`")
+        if qms["feedback"]["available"]:
+            st.caption(
+                f"  ↳ Feedback log: {qms['feedback']['open']} open / {qms['feedback']['total']} total"
+            )
+        for issue in qms["issues"]:
+            st.caption(f"  ↳ {issue}")
 
     if st.sidebar.button("🚪 Log out", use_container_width=True):
         log_event(LOGGER, "logout")

@@ -136,5 +136,12 @@ Write-Host "   dual-agent modes" -ForegroundColor Gray
 Write-Host ""
 Write-Host "You can now run 'dual-agent' from any directory." -ForegroundColor Green
 Write-Host ""
-Write-Host "To update later, re-run this install script or pull the latest code and run it again." -ForegroundColor DarkGray
+Write-Host "=== Post-install steps (strongly recommended) ===" -ForegroundColor Cyan
+Write-Host "1. Run:  dual-agent doctor" -ForegroundColor White
+Write-Host "   (This now performs a live Cursor agent creation test — the best validation.)"
+Write-Host ""
+Write-Host "2. After any future changes to the source in tools/dual-agent/, re-run this script" -ForegroundColor White
+Write-Host "   from the source directory to keep your global install in sync." -ForegroundColor White
+Write-Host ""
+Write-Host "The source tree (tools/dual-agent/ in the repo) is the canonical version." -ForegroundColor DarkGray
 Write-Host ""

@@ -159,6 +159,10 @@ Scripts/spike/**/artifacts/
 # Do not commit unless explicitly promoted.
 Documents/
 
+# Dual-agent session state + captured deploy logs (local only)
+.dual-agent-sessions/
+deploy-logs-temp/
+
 # ==================== One-off Review & Test Artifacts ====================
 # Historical review outputs and ad-hoc test scripts with no ongoing purpose.
 git-review-v2.37.txt

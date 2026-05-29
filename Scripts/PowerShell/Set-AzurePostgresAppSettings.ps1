@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Sets USE_POSTGRES and POSTGRES_* App Settings on slam-services-revenue-tracker.
-  Does NOT create the database — run Azure CLI provisioning first (see README).
+  Does NOT create the database - run Azure CLI provisioning first (see README).
 
 .PARAMETER PostgresHost
   e.g. slam-services-db.postgres.database.azure.com
@@ -44,7 +44,7 @@ if (-not $DisablePostgres -and -not $PostgresPassword) {
 }
 
 if ($DisablePostgres) {
-    Write-Host "Disabling PostgreSQL — app will use CSV mode."
+    Write-Host "Disabling PostgreSQL - app will use CSV mode."
     az webapp config appsettings set `
         -g $ResourceGroup `
         -n $WebAppName `

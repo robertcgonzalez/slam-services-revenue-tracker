@@ -9,3 +9,8 @@ psycopg2-binary>=2.9
 azure-ai-documentintelligence>=1.0.0
 # Azure Content Understanding — check imaging pages (prebuilt-check.us on Foundry)
 azure-ai-contentunderstanding>=1.1.0
+# Geometry check cropper + pdf2image (App Service B2 remediation — no EasyOCR)
+pdf2image>=1.17.0
+pillow>=10.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.26.0

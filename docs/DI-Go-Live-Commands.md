@@ -153,3 +153,7 @@ The output + the new "Current Implemented" section in `docs/data-model.md` + `db
 **End of exact command package**
 
 Keep this file next to `docs/deployment.md`. After the rename (if executed), update the `WebAppName` default in the setter script and any hard-coded references in this file.
+
+**Cursor execution prompt available**: For thorough autonomous execution of every step (with owner gates, full verification, health/validation smokes, pilot prep, and permanent runbook), use the ready-to-paste prompt in `docs/DI-Go-Live-Execution-Prompt.md`. Cursor (primary) drives; this file remains the canonical source of the exact commands.
+
+**Execution transcript (2026-05-29)**: The live production session record — including honest Phase 4 smoke outcomes and blockers — is in `docs/go-live-execution-runbook.md`. Blueprint v2.44.19 described planning artifacts; v2.44.20 records what actually happened.

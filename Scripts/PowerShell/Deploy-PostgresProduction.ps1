@@ -4,9 +4,12 @@
   End-to-end PostgreSQL production deploy helper (v2.30).
 
 .DESCRIPTION
+  Post-migration deploy only (P4). For full data-layer go-live (provision + migrate + wire + deploy),
+  use Invoke-DataLayerGoLive.ps1 instead.
+
   1. Runs health_check.py (if .env configured)
   2. Builds flat Azure zip
-  3. Deploys to App Service
+  3. Deploys to App Service (-CleanDeploy by default)
   4. Reminds operator to verify Data Source Status in the app
 
 .EXAMPLE
@@ -18,7 +21,8 @@ param(
     [string]$WebAppName = "slam-services-revenue-tracker",
     [string]$ZipName = "slam-app.zip",
     [switch]$SkipHealthCheck,
-    [switch]$SkipDeploy
+    [switch]$SkipDeploy,
+    [switch]$NoCleanDeploy
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,10 +53,14 @@ if ($SkipDeploy) {
 }
 
 Write-Host "=== Step 3: Deploy to Azure (modern polling-safe path) ==="
-& (Join-Path $PSScriptRoot "Deploy-ToAzure.ps1") `
-    -ResourceGroup $ResourceGroup `
-    -WebAppName $WebAppName `
-    -ZipPath (Join-Path $RepoRoot $ZipName)
+$deployParams = @{
+    ResourceGroup   = $ResourceGroup
+    WebAppName      = $WebAppName
+    ZipPath         = (Join-Path $RepoRoot $ZipName)
+    TimeoutSeconds  = 900
+}
+if (-not $NoCleanDeploy) { $deployParams["CleanDeploy"] = $true }
+& (Join-Path $PSScriptRoot "Deploy-ToAzure.ps1") @deployParams
 
 Write-Host "=== Done ==="
 Write-Host "Verify: https://${WebAppName}.azurewebsites.net/"

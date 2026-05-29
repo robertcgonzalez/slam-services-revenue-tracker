@@ -42,7 +42,7 @@ jobs:
       - name: Build deployment package (flat root, preserve Data on server)
         run: |
           mkdir -p deploy-package
-          cp requirements.txt runtime.txt startup.sh pyproject.toml deploy-package/
+          cp requirements.txt runtime.txt startup.sh apt.txt pyproject.toml deploy-package/
           cp -r App Scripts deploy-package/
           # Data/ is gitignored — not in CI checkout. Use manual zip or Kudu for CSV upload.
           # clean:false below preserves existing Data/ on App Service between code deploys.

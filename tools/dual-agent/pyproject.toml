@@ -3,7 +3,7 @@ name = "dual-agent"
 version = "0.1.0"
 description = "Autonomous feedback loop between Grok (headless) and Cursor agents using the official Cursor SDK"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"  # Relaxed for Cursor SDK bridge compatibility on Windows (bridge has issues with 3.14)
 license = {text = "MIT"}
 authors = [
   {name = "SLAM Services Team"}

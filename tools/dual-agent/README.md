@@ -131,11 +131,33 @@ dual-agent run "..." --export transcript.md
 - The tool respects your existing `.cursor/rules` and Grok project rules when the agents run.
 - Cursor SDK runs inherit the permissions of the API key you provide.
 
-## Development
+## Development & Keeping Global Install Fresh (Important)
+
+**`tools/dual-agent/` in this repo is the single source of truth.**
+
+After any changes to the Python code, templates, or scripts:
 
 ```powershell
-# After cloning / changing code
-pip install -e ".[dev]"
+# 1. Test locally with the project's hardened venv
+cd tools/dual-agent
+.\.venv\Scripts\Activate.ps1
+dual-agent doctor
+dual-agent templates
+
+# 2. Re-install globally so `dual-agent` (in PATH) picks up the fixes
+.\scripts\install-global.ps1
+```
+
+Then from anywhere:
+```powershell
+dual-agent doctor
+```
+
+The global copy at `~/.grok/tools/dual-agent` is a snapshot. Re-running the install script is the supported way to propagate improvements.
+
+```powershell
+# After cloning / changing code (in the dual-agent dir)
+pip install -e ".[dev]"   # or uv pip install -e .
 
 ruff check .
 ruff format .
@@ -146,7 +168,23 @@ ruff format .
 - [ ] Native support for Cursor "Composer" style long-running agents
 - [ ] Web UI / TUI for watching the loop live
 - [ ] MCP server so either agent can call the orchestrator as a tool
-- [ ] Pre-built high-value prompts for common workflows (migration, security audit, performance pass, etc.)
+- [x] Phased production recovery pattern (used successfully for Azure App Service startup command issues in 2026)
+
+## SLAM Services Production Pattern (Phased Handoffs)
+
+For complex operational fixes (e.g. Azure startup errors, deployment hardening), the project uses **small focused directives** run through the orchestrator:
+
+1. Create a minimal Phase N directive in `docs/handoffs/` (one clear goal per phase).
+2. Launch via the convenient wrapper from repo root:
+   ```powershell
+   .\Scripts\PowerShell\Invoke-DualAgentHandoff.ps1 -Directive "docs/handoffs/azure-startup-fix-phase1-clear-command.md" -MaxTurns 4
+   ```
+3. Cursor implements, signals "**PHASE N COMPLETE — ready for Grok review**".
+4. Review, then chain the next phase.
+
+This approach keeps context small, Grok review turns fast, and each phase independently verifiable.
+
+The wrapper (`Invoke-DualAgentHandoff.ps1`) ensures the hardened Python 3.10 venv + bridge shims are always used.
 
 ## Documentation & Status
 

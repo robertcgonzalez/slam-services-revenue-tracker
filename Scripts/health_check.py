@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from App.data_paths import resolve_data_path  # noqa: E402
 from App.db_utils import get_connection_status, init_schema  # noqa: E402
+from App.diagnostics import get_qms_status  # noqa: E402
 
 
 def check_csv_mode(*, as_json: bool) -> int:
@@ -60,6 +61,32 @@ def check_csv_mode(*, as_json: bool) -> int:
     return 0
 
 
+def check_qms(*, as_json: bool) -> int:
+    """Validate QMS operational artifacts and feedback log visibility."""
+    data_path, _logs = resolve_data_path()
+    status = get_qms_status(data_path=data_path)
+    code = 0 if status["operational"] else 1
+    if as_json:
+        print(json.dumps(status, indent=2))
+        return code
+
+    label = "OK" if status["operational"] else "WARN"
+    print(f"{label}: QMS baseline — summary={status['summary']}")
+    if status["last_state_alignment"]:
+        print(f"  last_state_alignment={status['last_state_alignment']}")
+    if status["last_management_review"]:
+        print(f"  last_management_review={status['last_management_review']}")
+    if status["risk_register_last_reviewed"]:
+        print(f"  risk_register_last_reviewed={status['risk_register_last_reviewed']}")
+    feedback = status["feedback"]
+    if feedback["available"]:
+        print(f"  feedback_log={feedback['open']} open / {feedback['total']} total")
+    if status["issues"]:
+        for issue in status["issues"]:
+            print(f"  issue: {issue}", file=sys.stderr)
+    return code
+
+
 def main() -> int:
     load_dotenv(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description="SLAM Revenue Tracker health check")
@@ -77,24 +104,33 @@ def main() -> int:
     parser.add_argument(
         "--full",
         action="store_true",
-        help="Run CSV check then PostgreSQL check when configured",
+        help="Run CSV check, QMS check, then PostgreSQL check when configured",
+    )
+    parser.add_argument(
+        "--qms",
+        action="store_true",
+        help="Validate QMS operational artifacts and feedback log",
     )
     args = parser.parse_args()
 
+    if args.qms:
+        return check_qms(as_json=args.json)
+
     if args.full:
         csv_code = check_csv_mode(as_json=False)
+        qms_code = check_qms(as_json=False)
         status = get_connection_status(reset=True)
         if not status["configured"]:
             print("PostgreSQL: not configured (CSV-only OK)")
-            return csv_code
+            return max(csv_code, qms_code)
         if not status["connected"]:
             print(f"PostgreSQL FAIL: {status['message']}", file=sys.stderr)
-            return 1 if csv_code != 0 else 1
+            return 1 if csv_code != 0 or qms_code != 0 else 1
         stats = status.get("stats") or {}
         print(
             f"PostgreSQL OK: {stats.get('clients', 0)} clients, {stats.get('requests', 0)} requests"
         )
-        return csv_code
+        return max(csv_code, qms_code)
 
     if args.csv:
         return check_csv_mode(as_json=args.json)
