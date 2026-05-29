@@ -182,3 +182,82 @@ Live URL: https://slam-services-revenue-tracker.azurewebsites.net/
 ---
 
 **Last major update to this guide**: Extracted from README during 2026-05-27 documentation TLC pass. All historical rationale lives in the Blueprint Change Log (v2.38.3, v2.44.x deployment notes).
+
+---
+
+## Production Bank Statement DI Go-Live (Azure Document Intelligence)
+
+**Owner-approved baseline (2026 review)**:
+- Primary engine: two-leg Document Intelligence (`prebuilt-bankStatement.us` for register pages + geometric cropper v5 + `prebuilt-check.us` per imaging-page crop).
+- Check leg starts on `prebuilt-check.us` (evaluate Content Understanding or custom model later).
+- App Service tier: remain on F1 for initial pilot; upgrade to B1 only if real usage demonstrates CPU/latency caps.
+- DI resource (`slam-bank-statements`): upgrade from F0 to S0 **before** Laura pilot exposure.
+- Rollout: full team (any client Laura, Patty, Stef, or Robert wants to process) — no artificial pilot scoping.
+- UI language: present the DI path as the current production capability (adjust away from permanent "Phase 1" framing while preserving the Grok Vision safe fallback).
+
+### Prerequisites
+- Azure CLI logged in with RBAC on `SLAM-Services-RG`.
+- `slam-bank-statements` resource upgraded to S0 (or accept F0 limits only for a very short internal validation window).
+- Latest code deployed (the `azure-ai-documentintelligence` package is already in `requirements.txt`).
+
+### One-Command Production Enablement
+```powershell
+cd C:\slam-services-project
+.\Scripts\PowerShell\Set-AzureBankStatementDIAppSettings.ps1
+```
+
+The script:
+- Pulls the live endpoint + key from the `slam-bank-statements` cognitive services resource.
+- Sets `AZURE_DI_ENDPOINT`, `AZURE_DI_KEY`, `AZURE_DI_MODEL=prebuilt-bankStatement.us`, `AZURE_DI_CHECK_MODEL=prebuilt-check.us`, imaging page tunables, and backward-compat `AZURE_OCR_FUNCTION_*` aliases.
+- Supports `-DisableDI` for instant rollback (no code change, no redeploy required).
+- Supports `-WhatIf` for safe dry-run.
+
+After running the setter:
+1. Redeploy (`Deploy-ToAzure.ps1` or GitHub Action).
+2. `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` (enhanced version reports DI status).
+3. Robert validates with real PDFs from `Data/`.
+4. Schedule the full-team pilot session.
+
+### Rollback (one command)
+```powershell
+.\Scripts\PowerShell\Set-AzureBankStatementDIAppSettings.ps1 -DisableDI
+```
+The Bank Statements page immediately falls back to the lightweight parser + Grok Vision paste paths. Zero data impact.
+
+### Cost & Monitoring
+- DI usage is pay-per-page (prebuilt models). The page pre-filter in `App/azure_di_utils.py` skips blank/reconciliation/summary pages before any paid call.
+- Monitor in the Azure Portal under the `slam-bank-statements` resource → Metrics (calls, pages analyzed, errors).
+- Set budget alerts on the subscription for the first 30 days.
+- Expected cost at current volume: low single-digit dollars per month after S0 upgrade.
+
+### Health & Verification After Go-Live
+Use the enhanced health checks (see "Health & Smoke Checks" above plus the DI-specific probes added in the go-live pass). Always run a full regression on at least two hard scanned statements (e.g., `Auto_Body_Center_Jan_26_Statement.pdf`) before declaring the path ready for Laura's daily driver.
+
+### Related Artifacts
+- Setter: `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1`
+- Local equivalent (for Robert): `Scripts/PowerShell/Set-LocalAzureBankStatementEnv.ps1`
+- Implementation: `App/azure_document_intelligence.py`, `App/azure_di_utils.py`, `App/bank_statements_tabular.py`
+- Schema (current production tables that Bank Statements writes to): `db/schema.sql`
+- Full decision record: Blueprint Change Log entry for the 2026 DI go-live.
+
+---
+
+## Production Postgres Schema Reference
+
+The live Azure PostgreSQL instance (when `USE_POSTGRES=true`) contains only the tables defined in `db/schema.sql`.
+
+**Current implemented tables (production as of 2026 DI go-live)**:
+- `clients`
+- `revenue_requests` (the `bank_statement_received` and `sales_report_received` booleans are written directly by the Bank Statements page after successful DI processing or Grok Vision paste)
+
+**Canonical definition**: `db/schema.sql` (heavily commented, matches `App/db_utils.py` SQLAlchemy models exactly).
+
+**Local repro**: `python Scripts/init_db.py` (or `psql $DATABASE_URL -f db/schema.sql`).
+
+**Verification**: The enhanced `Check-AppHealth.ps1 -Full` and `health_check.py --full` now include schema connectivity and basic drift awareness.
+
+**Future entities** (Documents, Transactions, BankReconciliations, Payroll, Tax Filings, etc.) remain aspirational in `docs/data-model.md` until they are implemented and promoted into `db/schema.sql`.
+
+Never assume a table exists in production unless it is listed in `db/schema.sql`.
+
+**Last schema baseline update**: Captured as part of the 2026 Azure DI Bank Statement go-live + schema robustness workstream.

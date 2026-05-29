@@ -37,7 +37,10 @@ _engine: Engine | None = None
 
 
 class Client(Base):
-    """Blueprint Section 7 — Clients (Phase 3 initial schema)."""
+    """Current production schema (see db/schema.sql for the canonical definition).
+    Clients master table. Used by Revenue Requests, Bank Statements client selector,
+    payee rules, and audit actor display. Soft-delete + full audit fields.
+    """
 
     __tablename__ = "clients"
 
@@ -61,7 +64,12 @@ class Client(Base):
 
 
 class RevenueRequest(Base):
-    """Blueprint Section 7 — RevenueRequests (Phase 3 initial schema)."""
+    """Current production schema (see db/schema.sql for the canonical definition).
+    Core revenue-chasing work queue. The two boolean flags
+    (bank_statement_received, sales_report_received) are mutated directly from the
+    Bank Statements page after successful Azure DI processing or Grok Vision paste.
+    Soft-delete + full audit fields (updated_by comes from SLAM_APP_USER).
+    """
 
     __tablename__ = "revenue_requests"
 
@@ -160,7 +168,10 @@ def create_db_engine() -> Engine:
 
 
 def init_schema(engine: Engine | None = None) -> None:
-    """Create clients + revenue_requests tables if they do not exist."""
+    """Create clients + revenue_requests tables if they do not exist.
+    The authoritative definition lives in db/schema.sql (heavily commented).
+    This function is the SQLAlchemy equivalent for local repro and migrations.
+    """
     eng = engine or get_db_engine()
     Base.metadata.create_all(eng)
 

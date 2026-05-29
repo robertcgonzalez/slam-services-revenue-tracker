@@ -109,9 +109,11 @@ python Scripts/health_check.py --csv     # validates CSV fallback path
 
 | Command | Purpose |
 |---------|---------|
-| `python Scripts/health_check.py --full` | CSV + Postgres + row counts |
-| `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` | Pre-UAT / post-deploy (includes live URL reachability) |
+| `python Scripts/health_check.py --full` | CSV + Postgres + row counts + schema connectivity |
+| `.\Scripts\PowerShell\Check-AppHealth.ps1 -Full -CheckAzure` | Pre-UAT / post-deploy (includes live URL reachability + DI status after go-live) |
 | Sidebar **🔧 System status** (in-app) | Live capability detection, runtime, data freshness |
+
+**Production schema note**: The live Postgres tables are defined in `db/schema.sql` (the single source of truth). Local repro uses the same definition via `init_db.py` or direct `psql`. See `docs/data-model.md` ("Current Implemented" section) for details.
 
 ---
 
@@ -127,6 +129,7 @@ python Scripts/health_check.py --csv     # validates CSV fallback path
 | `SLAM_IMAGING_FIRST_PAGE` / `SLAM_IMAGING_LAST_PAGE` | Imaging-page scope for CV crop OCR (Traditions hard PDF: `5` / `9`). |
 | `SLAM_CV_CACHE_DIR` | Optional cache for zero-cost dev reruns (reuses saved CV JSON; enables CV leg without live calls). |
 | `SLAM_CLIENT_NAME` | Optional client hint for bank profile / payee scoring. |
+| `AZURE_DI_ENDPOINT` / `AZURE_DI_KEY` + `AZURE_DI_MODEL` / `AZURE_DI_CHECK_MODEL` | Production Azure Document Intelligence (two-leg bank statement pipeline). Normally set via `Set-AzureBankStatementDIAppSettings.ps1` on the App Service; use the local equivalent setter for Robert's machine. |
 | `SLAM_HYBRID_CV_ENABLED` | Legacy optional gate for production; not required for Local Enhanced (Sprint 3.3). |
 
 ---

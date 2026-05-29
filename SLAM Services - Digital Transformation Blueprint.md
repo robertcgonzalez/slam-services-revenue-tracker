@@ -1,10 +1,12 @@
 # SLAM Services - Digital Transformation Blueprint
 
-**Version**: 2.44.16  
-**Date**: May 28, 2026  
-**Status**: **Local Windows is the sole supported development environment.** GitHub Codespaces / `.devcontainer` provisioning and remote Codespaces agent connection recipes were removed from the repo (v2.44.16). Heavy Local Enhanced OCR + Azure CV check leg run via `Setup-LocalVenv.ps1` / `Install-LocalHeavyOcr.ps1` + `run_local.ps1` on Robert's machine. Production F1 App Service `slam-services-revenue-tracker` unchanged for Laura's daily-driver workflow. Azure OCR Function deploy decision (v2.43.1) remains parked. **Cursor is primary agent**; Grok secondary.
+**Version**: 2.44.19  
+**Date**: June 2026  
+**Status**: **Local Windows is the sole supported development environment.** Production F1 App Service `slam-services-revenue-tracker` now has the Azure Document Intelligence two-leg bank statement pipeline enabled as the primary path (go-live executed). `db/schema.sql` is the new canonical schema definition. Azure OCR Function remains parked. **Cursor is primary agent**; Grok secondary.
 
 ## Change Log
+
+- **v2.44.19 (June 2026)**: **Azure Document Intelligence bank statement pipeline — production go-live.** After the full approved plan (Grok session 019e71fc), the two-leg DI path (`prebuilt-bankStatement.us` + cropper v5 + `prebuilt-check.us`) was enabled on the live F1 App Service via the new `Set-AzureBankStatementDIAppSettings.ps1`. `db/schema.sql` was created as the canonical, heavily commented definition of the current production Postgres tables (`clients` + `revenue_requests`, including the `bank_statement_received` / `sales_report_received` flags written by Bank Statements). `docs/data-model.md` was restructured into clear "Current Implemented" vs "Future/Aspirational" sections. `docs/DI-Go-Live-Commands.md` and the Cursor rename prompt were delivered. Owner decisions locked: S0 for DI resource before Laura pilot, F1 pilot-then-evaluate for App Service, `prebuilt-check.us` first for check leg, full team enablement, schema captured "from the drop". All changes followed the mandatory git verification sequence + Constitution (Laura confidence first). The old Azure OCR Function remains parked. Full command runbook and rollback path documented.
 
 - **v2.44.18 (June 2026)**: **Imaging Leg stabilization — committed to cropping + per-crop Document Intelligence as primary path.** After extensive iteration on the Azure multi-leg pipeline for bank statements (register pages + imaging pages with photographed checks/deposit slips), the team locked in the following for the paid-tier era:
   - Geometric cropper v5 (DPI-aware scaling, widened aspect ratios for deposit slips, `likely_deposit_slip`/`likely_check` tagging + persisted JSON sidecars).

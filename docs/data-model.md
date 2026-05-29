@@ -10,123 +10,92 @@
 
 ---
 
-## Current High-Level Model
+## Current High-Level Model (Production Baseline)
 
 - **Primary store (production)**: Azure Database for PostgreSQL (Flexible Server) when `USE_POSTGRES=true`.
-- **Fallback**: CSV files under `Data/` (fully supported, zero-disruption path).
-- **Inspiration**: Original `Business problem.docx` Dataverse proposal, adapted for code-first relational + pragmatic CSV parity.
-- **Key characteristics**: Normalized tables, audit fields, soft-delete safety, document linking via JSON or junction tables.
+- **Fallback**: CSV files under `Data/` (fully supported, zero-disruption path — never remove this).
+- **Canonical definition**: `db/schema.sql` (the single source of truth for what actually exists in the live database).
+- **Key characteristics**: Minimal, accurate, audit-heavy (created/updated + actor + soft-delete on every row), pragmatic CSV parity.
+
+**Important (2026 DI go-live rule)**: Only tables listed in `db/schema.sql` are guaranteed to exist in production. Everything else below is aspirational until promoted.
 
 ---
 
-## Detailed Entities & Key Fields
+## Current Implemented Schema (Production — 2026 DI Go-Live Baseline)
 
-### Clients (Core master table)
+This section is **authoritative** and must match `db/schema.sql` + the SQLAlchemy models in `App/db_utils.py` at all times.
 
-- `client_id` (PK, UUID or serial)
-- `business_name`
-- `owner_name`
-- `email`, `phone`, `address`
-- `industry_type` (e.g., Restaurant, Bar, Construction)
-- `status` (Active, Inactive, Prospect)
-- `onboarding_date`, `notes`
-- `access_block_notes` (from existing data)
+### clients
+- `client_id` (SERIAL PK)
+- `business_name` (unique, not null) — primary lookup key
+- `owner_name`, `email`, `phone`, `address`, `ein`, `entity_type`
+- `industry_type` (default 'Other')
+- `status` (default 'Active')
+- `access_block_notes`, `notes`
+- `created_at`, `updated_at`, `created_by`, `updated_by`, `is_deleted` (soft delete)
 
-### RevenueRequests (Phase 1 focus – tracks revenue chasing)
+**Usage**: Master list for Dashboard, Revenue Requests, Bank Statements client selector, payee rule scoping.
 
-- `request_id` (PK)
-- `client_id` (FK)
-- `request_type` (e.g., Monthly Bookkeeping, Sales Tax, Liquor Tax)
-- `period` (e.g., "2025-04")
-- `amount_due`
-- `status` (Pending, Received, Invoiced, Paid)
-- `due_date`
-- `received_date`
-- `document_links` (JSON or separate table)
+### revenue_requests
+- `request_id` (INTEGER PK — stable business key from CSV source)
+- `client_id` (FK → clients)
+- `request_type`, `period`, `amount_due` (NUMERIC(12,2))
+- `status` (default 'Pending')
+- `due_date`, `received_date`
 - `notes`
+- `bank_statement_received` (BOOLEAN) — written by Bank Statements "Mark as Received" after DI or Grok Vision success
+- `sales_report_received` (BOOLEAN) — companion flag, same mutation path
+- `created_at`, `updated_at`, `created_by`, `updated_by`, `is_deleted`
 
-### Documents
+**Usage**: Core daily-driver work queue. The 2026 Azure Document Intelligence bank statement pipeline directly improves the quality and speed of the data that feeds the `*_received` updates.
 
-- `document_id` (PK)
-- `client_id` (FK)
-- `document_type` (BankStatement, PayrollData, SalesReport, LiquorTaxReport, TaxForm, etc.)
-- `file_name`, `file_path` (Google Drive/OneDrive link)
-- `upload_date`, `uploaded_by`
-- `status` (Received, Processed, Archived)
-- `ai_extraction_confidence`
-- `linked_to` (e.g., BankReconciliation ID, PayrollRun ID)
+**Audit & soft-delete pattern** (identical on both tables):
+- Never hard-delete rows.
+- `updated_by` is populated from the `SLAM_APP_USER` App Setting (Laura, Stef, Robert, etc.).
+- `is_deleted` filters are applied in all production queries (`get_db_stats`, UI lists, etc.).
 
-### BankStatements
+See `db/schema.sql` for the exact `CREATE TABLE` statements, indexes, and comments. See `App/db_utils.py` for the SQLAlchemy `Client` and `RevenueRequest` models that generate the same structure via `init_schema()`.
 
-- `statement_id` (PK)
-- `client_id` (FK)
-- `document_id` (FK)
-- `statement_month`
-- `bank_name`
-- `starting_balance`, `ending_balance`
-- `processing_status`
-- `ai_extraction_date`
+---
 
-### Transactions
+## Future / Aspirational Entities (Not Yet Implemented)
 
-- `transaction_id` (PK)
-- `statement_id` (FK)
-- `client_id` (FK)
-- `date`, `description`, `amount`
-- `category` (AI-assisted)
-- `reconciliation_status` (Matched, Unmatched, Pending)
-- `matched_to` (reference to bookkeeping entry)
+The content below is retained for long-term vision and roadmap context. **None of these tables exist in the live production database** until they are implemented, added to `db/schema.sql`, and the "Current Implemented" section above is updated on the same commit.
 
-### BankReconciliations
+### Documents (future)
+- `document_id`, `client_id`, `document_type` (BankStatement, SalesReport, ...), `file_name`/`file_path`, `upload_date`, `uploaded_by`, `status`, `ai_extraction_confidence`, `linked_to`
 
-- `reconciliation_id` (PK)
-- `client_id` (FK)
-- `statement_id` (FK)
-- `period`
-- `status` (In Progress, Completed, Reviewed)
-- `difference_amount`
-- `completed_date`
-- `reviewed_by`
+### BankStatements, Transactions, BankReconciliations (future)
+- (Detailed fields as previously drafted — see git history of this file for the 2026-05-28 version.)
 
-### PayrollRuns
+### PayrollRuns, SalesTaxFilings, LiquorTaxFilings, Invoices, Tasks/Communications/Reminders (future)
+- Similar normalized structures with status machines and document linking.
 
-- `payroll_id` (PK)
-- `client_id` (FK)
-- `pay_period`
-- `pay_date`
-- `total_gross`, `total_net`, `total_taxes`
-- `status`
-- `document_id` (FK)
+### Audit Fields (future pattern)
+- Will continue the `created_at/updated_at/created_by/updated_by/is_deleted` pattern established in the current tables.
 
-### SalesTaxFilings & LiquorTaxFilings
+### Relationships (future)
+- Will be added only when the concrete tables are promoted.
 
-- Similar structure to PayrollRuns with filing-specific fields (due_date, filed_date, confirmation_number, liability_amount)
+This aspirational section supports the original Business Problem scope but is **not** a commitment or current reality.
 
-### Invoices
+---
 
-- `invoice_id` (PK)
-- `client_id` (FK)
-- `invoice_date`, `due_date`
-- `total_amount`
-- `status` (Draft, Sent, Paid)
-- `linked_services` (JSON array of related Payroll/BankRec/etc. IDs)
+## Evolution & Maintenance
 
-### Tasks / Communications / Reminders
+- **2026 DI Go-Live + Schema Robustness Workstream**: `db/schema.sql` was created as the canonical on-disk definition. `docs/data-model.md` was restructured so that "Current Implemented" is 100% accurate to production while the broader vision remains visible but clearly labeled as future work. This directly supports handoff confidence for Patty & Robert and reduces single-person memory risk (Constitution priority).
+- Any future table, column, or constraint change must update **all three** locations on the same commit:
+  1. `db/schema.sql`
+  2. The corresponding SQLAlchemy model(s) in `App/db_utils.py`
+  3. The "Current Implemented" section of this document (plus a note in the Evolution section)
+- The DI bank statement pipeline (and any later persistence of crops, extracted payees, or provenance) will drive the next evolution of this schema.
 
-- Support tracking of deadlines, notes, messages, and automated reminders.
-
-### Audit Fields (on all tables)
-
-- `created_at`, `updated_at`
-- `created_by`, `updated_by`
-- `is_deleted` (soft delete)
-
-### Relationships
-
-- One-to-Many: Client → Documents, RevenueRequests, BankReconciliations, PayrollRuns, etc.
-- Many-to-Many: Documents ↔ Services (via junction table if needed)
-
-This schema supports the full scope from the original Business Problem (document management, bank recs, payroll, tax filings, invoicing, reminders).
+**References**:
+- `db/schema.sql` (production truth)
+- `App/db_utils.py` (init_schema, CRUD, connection handling)
+- `Scripts/init_db.py`, `Scripts/migrate_to_postgres.py`
+- `docs/deployment.md` (Postgres Schema Reference subsection)
+- Blueprint Section 7 (high-level strategy only)
 
 ---
 
