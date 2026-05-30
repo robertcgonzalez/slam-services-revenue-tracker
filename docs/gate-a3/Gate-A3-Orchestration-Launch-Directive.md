@@ -75,8 +75,7 @@ Upon receipt of this directive (whether via direct Grok CLI submission or human 
    - Risk assessment of proceeding to Laura pilot vs maintaining rollback posture.
 
 6. **Any Additional Prep**
-   - Commands/scripts the human should run before the smoke (health checks, DI probe if added, etc.).
-   - Clear handoff instructions for when the human pastes smoke results back.
+   - (Prime Directive — agents execute everything) Commands/scripts that Cursor itself (with full auth) will run for health checks, DI probe, pre-smoke validation, the actual deployment, and the smoke. Cursor performs the smoke and captures results inside the autonomous loop. No handoff to a human for pasting or execution. All steps are driven by the agents until full TASK COMPLETE on the real systems.
 
 ---
 

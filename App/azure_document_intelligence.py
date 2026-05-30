@@ -591,7 +591,12 @@ def analyze_checks_from_crop_directory(
     if not folder.is_dir():
         return [], {"check_count": 0, "warnings": ["crop directory missing"]}
 
-    png_files = sorted(folder.glob("*.png"))
+    # Geometry cropper moves likely checks into ``checks/`` (deposit slips → ``deposits/``).
+    checks_subdir = folder / "checks"
+    if checks_subdir.is_dir():
+        png_files = sorted(checks_subdir.glob("*.png"))
+    else:
+        png_files = sorted(folder.glob("*.png"))
     if not png_files:
         return [], {"check_count": 0, "warnings": ["no crop PNG files"]}
 

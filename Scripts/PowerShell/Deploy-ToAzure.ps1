@@ -102,6 +102,25 @@ function Get-KuduWwwRootListing {
     return $r.Output
 }
 
+function Test-PopplerViaKudu {
+    param([string]$ScmBase, [hashtable]$Headers)
+    try {
+        $r = Invoke-KuduCommand -ScmBase $ScmBase -Headers $Headers `
+            -Command 'command -v pdftoppm && pdftoppm -v 2>&1 | head -1' -TimeoutSec 30
+        if ($r.ExitCode -eq 0 -and $r.Output -match "pdftoppm") {
+            Write-Ok "Poppler (pdftoppm) present after startup: $($r.Output.Trim())"
+            return $true
+        }
+        Write-Warn2 "Poppler (pdftoppm) not on PATH after startup - imaging leg may be disabled."
+        Write-Host "  Check Log Stream for: IMAGING_LEG poppler=ok" -ForegroundColor Yellow
+        return $false
+    }
+    catch {
+        Write-Warn2 "Could not probe pdftoppm via Kudu: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Publish-WwwRootStartupFiles {
     param([string]$RepoRoot, [string]$ScmBase, [hashtable]$Headers)
     $files = @("startup.sh", "runtime.txt", "apt.txt")
@@ -112,8 +131,10 @@ function Publish-WwwRootStartupFiles {
         }
         $bytes = [IO.File]::ReadAllBytes($local)
         $uri = "$ScmBase/api/vfs/site/wwwroot/$name"
-        Invoke-RestMethod -Method Put -Uri $uri -Headers $Headers -Body $bytes `
-            -ContentType "application/octet-stream" -TimeoutSec 120 | Out-Null
+        $putHeaders = $Headers.Clone()
+        $putHeaders['If-Match'] = '*'
+        Invoke-WebRequest -Method Put -Uri $uri -Headers $putHeaders -Body $bytes `
+            -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 120 | Out-Null
         Write-Ok "Seeded wwwroot/$name via Kudu VFS"
     }
     Invoke-KuduCommand -ScmBase $ScmBase -Headers $Headers -Command "chmod +x startup.sh" -TimeoutSec 60 | Out-Null
@@ -488,7 +509,7 @@ else {
                 -StartupCommand $startupCmd -SkipSmokeTest
         }
         else {
-            Write-Warn2 "Set-AzureStartupCommand.ps1 not found — set Startup Command manually to: $startupCmd"
+            Write-Warn2 "Set-AzureStartupCommand.ps1 not found - set Startup Command manually to: $startupCmd"
         }
     }
     else {
@@ -496,6 +517,21 @@ else {
     }
 
     if (Test-KuduWwwRootFile -ScmBase $scmBase -Headers $kuduHeaders -RelativePath "output.tar.zst") {
+        Write-Step "Syncing App/ and Scripts/ from latest Oryx tarball (code-only deploys)"
+        try {
+            Expand-OryxCompressedStartupArtifacts -ScmBase $scmBase -Headers $kuduHeaders
+        }
+        catch {
+            Write-Warn2 "Oryx App/Scripts sync: $($_.Exception.Message)"
+        }
+        # Oryx tarball extract can overwrite seeded startup.sh — re-apply repo copies last.
+        try {
+            Publish-WwwRootStartupFiles -RepoRoot $RepoRoot -ScmBase $scmBase -Headers $kuduHeaders
+            Write-Ok "Re-seeded startup.sh, runtime.txt, apt.txt after Oryx sync"
+        }
+        catch {
+            Write-Warn2 "Post-Oryx startup re-seed: $($_.Exception.Message)"
+        }
         Write-Warn2 "output.tar.zst still present (Oryx compressed build). Flat startup files were seeded/extracted for platform startup."
         try {
             $manifest = Invoke-RestMethod -Uri "$scmBase/api/vfs/site/wwwroot/oryx-manifest.toml" -Headers $kuduHeaders -TimeoutSec 45
@@ -539,6 +575,10 @@ if (-not $SkipSmokeTest) {
     }
     if (-not $smokeOk) {
         Write-Warn2 "Smoke test did not confirm a healthy app response (site may still be warming up)."
+    }
+    elseif ($kuduHeaders) {
+        Write-Step "Poppler probe (post-startup, via Kudu)"
+        Test-PopplerViaKudu -ScmBase $scmBase -Headers $kuduHeaders | Out-Null
     }
 }
 

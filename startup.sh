@@ -60,26 +60,41 @@ else
 fi
 
 log "Poppler probe (pdf2image / check cropper)..."
+_poppler_ok=false
 if command -v pdftoppm >/dev/null 2>&1; then
+  _poppler_ok=true
   log "  [OK] pdftoppm: $(command -v pdftoppm)"
   pdftoppm -v 2>&1 | head -1 || true
 else
   log "  [WARN] pdftoppm not on PATH — check cropper may fail at runtime."
-  if [ "$AZURE_PROD" = "true" ]; then
-    log "  [WARN] Production: skipping runtime apt-get (non-fatal). Ensure apt.txt + Oryx build installed poppler-utils."
-  else
-    log "  [WARN] Attempting poppler-utils install (non-fatal)..."
-    if apt-get update -qq && apt-get install -y -qq poppler-utils 2>/dev/null; then
+  log "  Attempting poppler-utils install (non-fatal, required for DI imaging leg)..."
+  # Always attempt (even in production fast-path). Oryx/apt.txt is not 100% reliable for this package.
+  # Keep it quick and non-blocking for the Azure warmup probe.
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    timeout 20 apt-get update -qq 2>/dev/null || log "  [WARN] apt-get update skipped or timed out (continuing)."
+    if timeout 45 apt-get install -y -qq poppler-utils 2>/dev/null; then
       if command -v pdftoppm >/dev/null 2>&1; then
-        log "  [OK] pdftoppm installed: $(command -v pdftoppm)"
+        _poppler_ok=true
+        log "  [OK] pdftoppm installed via apt: $(command -v pdftoppm)"
+        pdftoppm -v 2>&1 | head -1 || true
       else
-        log "  [WARN] apt install finished but pdftoppm still missing."
+        log "  [WARN] apt install finished but pdftoppm still not on PATH."
       fi
     else
-      log "  [WARN] Could not install poppler-utils (sandbox/apt). Ensure apt.txt + Oryx build or custom image."
+      log "  [WARN] Could not install poppler-utils (timeout / sandbox). Imaging leg will be disabled until fixed."
+      log "  Ensure apt.txt contains poppler-utils and the next deploy triggers a full Oryx build."
     fi
+  else
+    log "  [WARN] apt-get not available in this container — rely on apt.txt + Oryx build for poppler-utils."
   fi
 fi
+if [ "$_poppler_ok" = "true" ]; then
+  log "IMAGING_LEG poppler=ok — geometric cropper v5 + per-crop DI enabled."
+else
+  log "IMAGING_LEG poppler=missing — register-only DI; check cropper will be skipped."
+fi
+unset _poppler_ok
 
 run_health_check() {
   local label="$1"
@@ -103,6 +118,21 @@ else
   log "CSV mode (USE_POSTGRES not enabled)."
   if [ -d "$DATA_DIR" ]; then
     run_health_check "CSV health check" python Scripts/health_check.py --csv
+  fi
+fi
+
+RUN_SMOKE=$(echo "${SLAM_RUN_GATE_A3_SMOKE:-}" | tr '[:upper:]' '[:lower:]')
+if [ "$RUN_SMOKE" = "true" ] || [ "$RUN_SMOKE" = "1" ] || [ "$RUN_SMOKE" = "yes" ]; then
+  mkdir -p /home/site/wwwroot/tmp
+  if [ -f /home/site/wwwroot/tmp/HCC_2026-04.pdf ] && [ -f /home/site/wwwroot/tmp/Auto_Body_Center_Jan_26_Statement.pdf ]; then
+    log "SLAM_RUN_GATE_A3_SMOKE: starting headless Gate A3 DI smoke in background (logs -> wwwroot/tmp/gate-a3-smoke.log)."
+    (
+      python Scripts/Python/run_gate_a3_headless_smoke.py >>/home/site/wwwroot/tmp/gate-a3-smoke.log 2>&1
+      _rc=$?
+      log "SLAM_RUN_GATE_A3_SMOKE: headless smoke finished (exit ${_rc}). See wwwroot/tmp/gate-a3-smoke.log and stdout SMOKE_EVIDENCE lines."
+    ) &
+  else
+    log "WARNING: SLAM_RUN_GATE_A3_SMOKE set but canonical PDFs missing under wwwroot/tmp."
   fi
 fi
 

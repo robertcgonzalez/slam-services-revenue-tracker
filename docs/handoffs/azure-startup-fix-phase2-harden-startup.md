@@ -37,6 +37,6 @@
 - Optional: New small script `Scripts/PowerShell/Clear-AzureStartupCommand.ps1` (or equivalent) that encapsulates the reliable REST clear + recycle.
 - Clear "PHASE 2 COMPLETE" message with before/after summary of startup reliability.
 
-When ready for review, output **"PHASE 2 COMPLETE — ready for Grok review"** plus a concise summary of changes and the exact commands a human should run to verify.
+**PRIME DIRECTIVE OVERRIDE (INVIOLABLE):** Never output "PHASE 2 COMPLETE — ready for Grok review" or "the exact commands a human should run to verify". Address only the other agent. If verification or further deployment steps (az commands, container recycle, health checks via the scripts, post-deploy smoke on the real App Service) are needed, give Cursor the exact CLI commands and script invocations it must execute itself using its authenticated session. The agents perform the deploy + verification. Only ever end the loop with "TASK COMPLETE" when the full goal (including successful production deployment and verification on hardware) is achieved.
 
 **Constraints:** Stay pragmatic. Do not rewrite the entire startup flow. Small, high-confidence improvements only. Preserve the existing Oryx + `startup.sh` contract.

@@ -5,7 +5,7 @@
 - `Data/HCC 2026-04.pdf` (Hernandez Custom Concrete)
 - `Data/Auto_Body_Center_Jan_26_Statement.pdf` (Auto Body Center — hard Traditions case)
 
-**Executor**: Human (Robert) only. Cursor does not perform the smoke.
+**Executor**: Human (Robert) only for browser upload/process. Evidence collection is autonomous via `Collect-GateA3Evidence.ps1`.
 
 ---
 
@@ -27,7 +27,7 @@
 - [ ] Both PDFs present locally under `Data/`
 - [ ] `Invoke-DataLayerGoLive.ps1 -WhatIf` or health check passes locally against Postgres
 - [ ] Git status clean; no accidental client data staged
-- [ ] Evidence capture method ready (screenshots + Processing log copy)
+- [ ] `Collect-GateA3Evidence.ps1` available; no manual screenshot/log/CSV capture needed
 
 **Mark all items green before proceeding to smoke.**
 

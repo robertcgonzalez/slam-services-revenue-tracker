@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
-from app_logging import log_event
+from app_logging import is_smoke_assessment_pdf, log_event, log_smoke_evidence
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 try:
@@ -1646,6 +1646,128 @@ def style_low_confidence_rows(df: pd.DataFrame):
     return df.style.apply(_highlight, axis=1)
 
 
+def _smoke_pdf_key(filename: str) -> str:
+    """Stable collector key for canonical Gate A3 PDFs."""
+    name = (filename or "").strip().lower()
+    if "hcc" in name and "2026-04" in name:
+        return "hcc"
+    if "auto_body" in name.replace(" ", "_"):
+        return "auto_body"
+    return re.sub(r"[^a-z0-9]+", "_", name).strip("_") or "unknown"
+
+
+def _sanitize_log_excerpt(logs: list[str], *, max_lines: int = 12) -> list[str]:
+    """Last N processing log lines with obvious account-like tokens redacted."""
+    excerpt = logs[-max_lines:] if logs else []
+    redacted: list[str] = []
+    for line in excerpt:
+        s = str(line)
+        s = re.sub(r"\b\d{9,}\b", "[acct]", s)
+        redacted.append(s[:240])
+    return redacted
+
+
+def _sample_payees(df: pd.DataFrame | None, *, limit: int = 3) -> list[str]:
+    if df is None or df.empty or "Payee" not in df.columns:
+        return []
+    samples: list[str] = []
+    for val in df["Payee"].astype(str).str.strip():
+        if not val or val.lower() in ("uncategorized", "n/a"):
+            continue
+        short = val[:48] + ("…" if len(val) > 48 else "")
+        if short not in samples:
+            samples.append(short)
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def emit_gate_a3_smoke_evidence(
+    pdf_filename: str,
+    df: pd.DataFrame | None,
+    meta: dict[str, Any],
+    logs: list[str],
+    logger,
+    *,
+    rules_info: dict[str, Any] | None = None,
+    client_name: str | None = None,
+) -> bool:
+    """Log SMOKE_EVIDENCE + optional /tmp sidecar for autonomous Gate A3 collection."""
+    if not is_smoke_assessment_pdf(pdf_filename):
+        return False
+
+    summary = transaction_summary_metrics(df if df is not None and not df.empty else pd.DataFrame())
+    log_text = "\n".join(str(x) for x in logs)
+    cropper_skipped = bool(meta.get("cropper_skipped"))
+    crops = int(meta.get("cropped_check_count") or 0)
+    imaging_active = crops > 0 and not cropper_skipped
+    if "cropper skipped" in log_text.lower() or "poppler not on path" in log_text.lower():
+        imaging_active = False
+
+    warnings: list[str] = []
+    for w in (meta.get("azure_di_meta") or {}).get("warnings") or []:
+        warnings.append(str(w)[:120])
+    for w in (meta.get("azure_check_meta") or {}).get("warnings") or []:
+        warnings.append(str(w)[:120])
+    warnings = warnings[:5]
+
+    errors: list[str] = []
+    if str(meta.get("status") or "") == "error":
+        errors.append(str(meta.get("message") or "pipeline_error")[:200])
+
+    duration_s = None
+    di_meta = meta.get("azure_di_meta") or meta
+    if isinstance(di_meta, dict) and di_meta.get("duration_sec") is not None:
+        duration_s = float(di_meta["duration_sec"])
+
+    evidence: dict[str, Any] = {
+        "smoke_key": _smoke_pdf_key(pdf_filename),
+        "client": (client_name or "")[:80],
+        "register_rows": int(meta.get("register_transaction_count") or 0),
+        "supplemental_rows": int(meta.get("supplemental_check_rows") or 0),
+        "transaction_rows": int(summary.get("count") or 0),
+        "crops": crops,
+        "likely_checks": int(meta.get("cropped_likely_checks") or 0),
+        "likely_deposits": int(meta.get("cropped_likely_deposits") or 0),
+        "deposits": round(float(summary.get("deposits") or 0), 2),
+        "withdrawals": round(float(summary.get("withdrawals") or 0), 2),
+        "needs_review": int(summary.get("needs_review") or 0),
+        "payee_rules_applied": int((rules_info or {}).get("rules_used") or 0),
+        "payee_rows_changed": int((rules_info or {}).get("rows_changed") or 0),
+        "payee_rules_total": int((rules_info or {}).get("rules_total") or 0),
+        "payee_merge_count": int(meta.get("azure_check_payees_merged") or 0),
+        "register_is_sparse": bool(meta.get("register_is_sparse")),
+        "imaging_active": imaging_active,
+        "cropper_skipped": cropper_skipped,
+        "check_engine": str(meta.get("azure_check_engine") or meta.get("check_source") or ""),
+        "status": str(meta.get("status") or ""),
+        "duration_s": duration_s,
+        "errors": errors,
+        "warnings": warnings,
+        "sample_payees": _sample_payees(df),
+        "log_excerpt": _sanitize_log_excerpt(logs),
+    }
+
+    log_smoke_evidence(logger, pdf_filename, evidence)
+
+    try:
+        import time
+
+        slug = _smoke_pdf_key(pdf_filename)
+        sidecar = {
+            "pdf": pdf_filename,
+            "collected_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "metrics": evidence,
+        }
+        path = Path(f"/tmp/slam-smoke-{slug}-{int(time.time())}.json")
+        path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+        log_event(logger, "gate_a3_smoke_sidecar_written", path=str(path), pdf=pdf_filename)
+    except OSError:
+        pass
+
+    return True
+
+
 def transaction_summary_metrics(df: pd.DataFrame) -> dict[str, float | int]:
     """Deposits (credits) and withdrawals (debits) from SignedAmount or Amount."""
 
@@ -2050,6 +2172,19 @@ def _parse_ocr_response_to_df(payload: dict[str, Any]) -> pd.DataFrame:
     return df[list(GROK_CSV_COLUMNS) + extras].reset_index(drop=True)
 
 
+# Register leg with fewer rows than this is treated as sparse — supplemental check
+# rows may be appended. At or above this threshold the register pass is authoritative
+# for totals; the imaging leg enriches payees only (see Gate A3 totals fix).
+_REGISTER_SPARSE_THRESHOLD = 3
+
+
+def _normalize_check_number(value: Any) -> str:
+    """Digits-only check number for cross-leg matching (MICR vs register text)."""
+
+    digits = re.sub(r"[^\d]", "", str(value or "").strip())
+    return digits.lstrip("0") or digits or ""
+
+
 def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """Drop obvious duplicates when register rows and check-derived rows overlap."""
 
@@ -2306,14 +2441,24 @@ def _run_azure_ocr_via_document_intelligence(
         #    register leg captured them (or partials). On sparse-register PDFs (most activity on
         #    imaging pages), the unmatched check rows still supply the missing transactions cleanly.
         register_check_nums = {
-            str(r.get("Check#") or "").strip()
+            _normalize_check_number(r.get("Check#"))
             for r in register_txns
-            if str(r.get("Check#") or "").strip()
+            if _normalize_check_number(r.get("Check#"))
         }
-        supplemental_check_txns = [
-            t for t in check_txns
-            if str(t.get("Check#") or "").strip() not in register_check_nums
+        unmatched_check_txns = [
+            t
+            for t in check_txns
+            if _normalize_check_number(t.get("Check#")) not in register_check_nums
         ]
+        # When the register pass is non-sparse, its withdrawal/deposit totals already
+        # reflect tabular activity. Appending check-image rows double-counts because
+        # Azure DI register output rarely populates Check# (so every check leg row
+        # looks "unmatched"). Reserve supplemental rows for sparse-register PDFs only;
+        # otherwise the imaging leg supplies payee enrichment via _merge_azure_checks.
+        register_is_sparse = len(register_txns) < _REGISTER_SPARSE_THRESHOLD
+        supplemental_check_txns = unmatched_check_txns if register_is_sparse else []
+        meta["register_is_sparse"] = register_is_sparse
+        meta["unmatched_check_rows"] = len(unmatched_check_txns)
 
         # Add clear provenance so the final CSV shows register vs check-image origin
         for row in register_txns:
@@ -2386,12 +2531,21 @@ def _run_azure_ocr_via_document_intelligence(
         if checks:
             df, merged = _merge_azure_checks_into_transactions(df, checks)
             meta["azure_check_payees_merged"] = merged
+        if register_is_sparse:
+            assembly_note = (
+                f"{len(supplemental_check_txns)} supplemental from checks "
+                f"(of {len(check_txns)} raw, {len(unmatched_check_txns)} unmatched)"
+            )
+        else:
+            assembly_note = (
+                f"0 supplemental rows appended (register pass authoritative; "
+                f"{len(unmatched_check_txns)} unmatched check leg row(s) used for payee merge only)"
+            )
         logs.append(
             _log(
                 "ok",
                 f"Combined {len(df)} transaction row(s): {len(register_txns)} register + "
-                f"{len(supplemental_check_txns)} supplemental from checks (of {len(check_txns)} raw); "
-                f"payee merge on {merged} row(s).",
+                f"{assembly_note}; payee merge on {merged} row(s).",
             )
         )
 

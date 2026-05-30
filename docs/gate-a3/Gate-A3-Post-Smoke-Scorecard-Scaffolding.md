@@ -1,6 +1,6 @@
 # Gate A3 — Post-Smoke Scorecard & Verdict Scaffolding
 
-**Use this after the human pastes the completed Evidence Template.**
+**Use this after `Collect-GateA3Evidence.ps1 -Both -UpdateDocs` (auto-filled) or manual evidence intake.**
 
 ---
 
@@ -8,11 +8,8 @@
 
 | Dimension                        | Result for HCC 2026-04 | Result for Auto Body Center | Notes |
 |----------------------------------|------------------------|-----------------------------|-------|
-| Register / tabular extraction    |                        |                             |       |
-| Check/imaging leg — detection    |                        |                             |       |
-| Check/imaging leg — payee quality|                        |                             |       |
-| Cropper activation (OpenCV)      |                        |                             |       |
-| Page-range clamping working      |                        |                             |       |
+| Register / tabular extraction    | 98 reg + 12 supp       | 88 rows                     | auto-collected | Check/imaging leg — detection    | Yes                    | 40 crops                    |       | Check/imaging leg — payee quality|                        |                             |       |
+| Cropper activation (OpenCV)      | Yes                    | 40 crops                    |       | Page-range clamping working      |                        |                             |       |
 | Consistency (same PDF, multiple runs) |                   |                             |       |
 | Processing log cleanliness       |                        |                             |       |
 
@@ -45,7 +42,7 @@
 
 **Primary Evidence** (1-3 sentences):
 
-_______________________________________________________________________________
+HCC: imaging leg active with crops detected.
 
 ---
 
@@ -98,3 +95,5 @@ Refs: docs/gate-a3/
 ---
 
 **Cursor: After filling this scorecard, update the main runbook "Gate A3" row, final production state table, and add a short "Gate A3 Verdict" subsection with the outcome and link to this file.**
+
+<!-- auto-collected 2026-05-30T01:28:15.904079+00:00 -->

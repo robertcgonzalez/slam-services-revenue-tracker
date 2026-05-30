@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from app_logging import log_event, setup_app_logging
+from app_logging import is_smoke_assessment_pdf, log_event, setup_app_logging
 
 try:
     from bank_statements import (
@@ -16,6 +16,7 @@ try:
         ZERO_TRANSACTIONS_MSG,
         apply_payee_rules,
         azure_ocr_status,
+        emit_gate_a3_smoke_evidence,
         build_grok_vision_prompt,
         build_statement_pivot,
         count_pattern_matches,
@@ -163,6 +164,9 @@ except ImportError:
                 "(or direct Azure Document Intelligence env vars) for bank statements."
             ),
         }
+
+    def emit_gate_a3_smoke_evidence(*_args, **_kwargs):
+        return False
 
     def run_azure_ocr_pipeline(_pdf_bytes, _pdf_filename, _client_name, _logger, **_kwargs):
         return (
@@ -2148,6 +2152,13 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
     if st.session_state.get("bank_stmt_logs"):
         with st.expander("Processing log", expanded=pipeline_status in ("error", None)):
             st.code(st.session_state["bank_stmt_logs"], language=None)
+    smoke_files = st.session_state.get("bank_stmt_smoke_evidence_files") or []
+    if smoke_files:
+        st.caption(
+            "Gate A3: validation evidence emitted to App Service logs for "
+            + ", ".join(f"`{n}`" for n in smoke_files)
+            + ". Run `Collect-GateA3Evidence.ps1 -Both` after both canonical PDFs are processed."
+        )
 
     txn_df = st.session_state.get("bank_stmt_txn_df")
     ocr_meta = st.session_state.get("bank_stmt_azure_ocr_meta") or {}
@@ -2393,6 +2404,7 @@ def _run_bank_statement_azure_process(
             last_meta: dict = {}
             last_pdf_name: str = ""
             last_grok_totals: dict | None = None
+            smoke_evidence_files: list[str] = []
 
             # Azure Document Intelligence (via Function or direct DI) is the *only* OCR path.
             # No local image processing, no EasyOCR, no pdfplumber fallback for bank statements.
@@ -2456,6 +2468,36 @@ def _run_bank_statement_azure_process(
                         "use Prepare for Grok Vision below if the PDF is scanned."
                     )
 
+                file_rules_info: dict | None = None
+                if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+                    try:
+                        df, file_rules_info = apply_payee_rules(
+                            df, client_name=selected_client
+                        )
+                        if file_rules_info and file_rules_info.get("rows_changed", 0) > 0:
+                            all_logs.append(
+                                f"[INFO] Payee rules engine ({up.name}): "
+                                f"{file_rules_info['rows_changed']} row(s) via "
+                                f"{file_rules_info['rules_used']} rule(s)."
+                            )
+                    except Exception as exc:
+                        all_logs.append(f"[WARN] Payee rules skipped for {up.name}: {exc}")
+
+                ocr_meta_full = meta_ocr if isinstance(meta_ocr, dict) else {}
+                if emit_gate_a3_smoke_evidence(
+                    up.name,
+                    df,
+                    ocr_meta_full,
+                    logs_ocr,
+                    LOGGER,
+                    rules_info=file_rules_info,
+                    client_name=selected_client,
+                ):
+                    smoke_evidence_files.append(up.name)
+                    all_logs.append(
+                        "[INFO] Validation evidence emitted to logs (Gate A3 collector)."
+                    )
+
                 last_meta = meta
                 last_pdf_name = up.name
                 if meta.get("cropper_user_message"):
@@ -2466,31 +2508,17 @@ def _run_bank_statement_azure_process(
                     last_status = meta.get("status", "success")
                 elif last_status != "partial":
                     last_status = "error"
-            # Auto-apply persistent payee rules before storing in session state so
-            # the review editor + reconciliation banner see the cleaned values.
             rules_info: dict | None = None
             if last_df is not None and not last_df.empty:
-                try:
-                    last_df, rules_info = apply_payee_rules(last_df, client_name=selected_client)
-                    if rules_info and rules_info.get("rows_changed", 0) > 0:
-                        all_logs.append(
-                            f"[INFO] Payee rules engine: {rules_info['rows_changed']} row(s) "
-                            f"improved via {rules_info['rules_used']} rule(s) "
-                            f"(of {rules_info['rules_total']} loaded)."
-                        )
-                    log_event(
-                        LOGGER,
-                        "bank_stmt_payee_rules_applied",
-                        client=selected_client,
-                        source="azure_ocr",
-                        rows_changed=int((rules_info or {}).get("rows_changed", 0)),
-                        rules_used=int((rules_info or {}).get("rules_used", 0)),
-                        rules_total=int((rules_info or {}).get("rules_total", 0)),
-                    )
-                except Exception as exc:
-                    all_logs.append(f"[WARN] Payee rules engine skipped: {exc}")
-                    log_event(LOGGER, "bank_stmt_payee_rules_error", error=str(exc)[:200])
+                log_event(
+                    LOGGER,
+                    "bank_stmt_payee_rules_applied",
+                    client=selected_client,
+                    source="azure_ocr",
+                    files=len(uploaded),
+                )
 
+            st.session_state["bank_stmt_smoke_evidence_files"] = smoke_evidence_files
             st.session_state["bank_stmt_logs"] = format_processing_log(all_logs)
             st.session_state["bank_stmt_txn_df"] = last_df
             st.session_state["bank_stmt_csv_path"] = str(last_csv) if last_csv else None
