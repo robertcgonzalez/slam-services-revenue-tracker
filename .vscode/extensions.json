@@ -1,6 +1,5 @@
 {
   "recommendations": [
-    "kilocode.kilo-code",
     "ms-python.python",
     "ms-python.vscode-pylance",
     "ms-python.debugpy",
@@ -24,5 +23,5 @@
     "gruntfuggly.todo-tree",
     "eamodio.gitlens"
   ],
-  "unwantedRecommendations": ["vscode-grok.vscode-grok"]
+  "unwantedRecommendations": ["vscode-grok.vscode-grok", "kilocode.kilo-code"]
 }

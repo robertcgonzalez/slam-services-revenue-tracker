@@ -4,20 +4,11 @@
 
 name: Build and deploy Python app to Azure Web App - slam-services-revenue-tracker
 
-# === AUTONOMOUS AGENT PUSH MODEL (Prime Directive + project contracts aligned) ===
-# Per .cursor/rules/slam-services.mdc, .grok/AGENT.md, CONSTITUTION.md, and docs/memorialization-discipline.md
-# (all synchronized to the dual-agent orchestrator Prime Directive in tools/dual-agent/dual_agent/orchestrator.py):
-# Agents (Cursor primary / Grok secondary, including inside dual-agent loops) are expected to run the canonical
-# `Scripts/PowerShell/Invoke-GitVerification.ps1`, receive CLEAN, then perform commit + direct `git push origin main`
-# themselves with zero handoff to a human. Any such push will trigger this workflow and a production deploy.
-# The verification script + Prime Directive "no human sequences" rule are the control plane.
-# Reversion to stricter branch protection / PR-only model remains possible via explicit Constitution amendment.
-# ===
+# Legacy Azure portal workflow — manual dispatch only (2026-05-30 drift audit Phase 1).
+# Primary production deploy path: Scripts/PowerShell/Deploy-ToAzure.ps1 (Oryx hardening, wwwroot guarantee, startup command).
+# deploy-azure.yml remains the hardened GHA path on push to main. This workflow deploys the full repo artifact without those mitigations.
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:

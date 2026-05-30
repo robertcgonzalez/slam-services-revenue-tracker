@@ -1,6 +1,6 @@
 # Data Model & Schema — SLAM Services (Delegated Companion)
 
-**Status**: Populated 2026-05-28 as the first real content delegation in the Blueprint Hub Evolution (see `Documents/Blueprint_Hub_Evolution_Audit_2026-05-28.md` and Blueprint Section 7).
+**Status**: Populated 2026-05-28 as the first real content delegation in the Blueprint Hub Evolution (see [`QMS/State-Alignment/runs/2026-05-28-blueprint-hub-evolution.md`](../QMS/State-Alignment/runs/2026-05-28-blueprint-hub-evolution.md) and Blueprint Section 7).
 
 **Role**: Specialized, living technical reference for the project's core data model. This document owns the detailed entity definitions, attribute lists, relationships, and migration notes. The Blueprint retains only high-level strategy and pointers.
 

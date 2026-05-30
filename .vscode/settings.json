@@ -100,8 +100,7 @@
   // Terminal (PowerShell 7 — matches user profile)
   "terminal.integrated.defaultProfile.windows": "PowerShell 7",
 
-  // Kilo Code remains primary agent; Cursor AI complements (no conflicts)
-  "kilo-code.new.showTaskTimeline": true,
+  // Cursor is primary agent (Kilo Code retired v2.44.2 — see Blueprint Change Log)
 
   // Azure
   "azureResourceGroups.showTags": true,

@@ -42,18 +42,25 @@ python Scripts/health_check.py --full
 
 ## Current Status (June 2026 — Post DI Go-Live)
 
-- **Development environment**: Local Windows only (including heavy OCR and Azure CV). No Docker/Codespaces dev container in repo.
-- **Azure Document Intelligence Bank Statements (2026 go-live)**: The two-leg DI pipeline (`prebuilt-bankStatement.us` + geometric cropper v5 + `prebuilt-check.us` per imaging crop) is now the primary production engine for Bank Statements when the App Service settings are configured. See `docs/DI-Go-Live-Commands.md`, the new `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1`, and the approved plan in the Grok session notes. The old Azure OCR Function remains parked. Grok Vision paste and lightweight parser stay as zero-risk fallbacks.
-- **Production schema captured**: `db/schema.sql` is the new canonical, heavily commented definition of the live Postgres tables (`clients` + `revenue_requests` with the `bank_statement_received` / `sales_report_received` flags). `docs/data-model.md` now clearly separates "Current Implemented" from future aspirational entities.
-- **G1 Sprint 3.4 (v2.44.13)**: CV round-trip complete — hybrid payees drive the final transaction table; see `Documents/cursor_g1_sprint_3_4_pipeline_finalization.md`.
-- **G1 Sprint 3.4+ (v2.44.14)**: Bank Statements has no processing-mode radio — the app auto-runs the richest pipeline. Azure CV is the **only** reader for cropped check/deposit images (no EasyOCR on crops).
-- **G1 Sprint 3.2**: Hybrid CV check leg wired in `App/local_enhanced_ocr.py`. Validate on local Windows.
-- **Bank Statements core workflow**: Upload PDF → Azure Document Intelligence (primary when configured) / Lightweight Parser / Local Enhanced OCR (Robert) / paste Grok CSV → automated reconciliation → persistent payee rules engine (v2.39) with **💡 Learn this mapping** → Mark as Received.
-- **G1 Hybrid CV Check Leg spike (Phases 0–7)**: Complete and isolated under `Scripts/spike/`. Strong results (7× clean-payee improvement on the hardest PDF). Owner decision B1 (Traditions-first integration sprint) approved. Feature-flagged; EasyOCR strict path remains the production default.
-- **Azure OCR Function**: `slam-ocr-function` (Y1 Consumption) exists but is parked on the v2.41 skeleton pending infra decision. The full v2.43/v2.44.3 intelligent check-linking pipeline is available locally via the in-process `App/local_enhanced_ocr.py`.
-- **Production PostgreSQL**: Provisioned, migrated, and now has an explicit canonical schema definition (`db/schema.sql`). CSV mode remains the zero-disruption fallback.
-- **Daily driver (Laura/Stef)**: Dashboard, Revenue Requests, Bank Statements, quick views, payee rules, and UAT stabilization all live on the F1 App Service.
-- **Full history**: See the Blueprint Change Log (v2.30 → v2.44.19+) for every architectural decision, spike, and hygiene pass.
+### Production (Azure App Service — DI-only)
+
+- **Bank Statements**: **Azure Document Intelligence only** when `AZURE_DI_*` App Settings are set. `App/app.py` hardcodes `run_mode = "azure_ocr"` and stops with a clear error if Azure DI is not configured — no processing-mode radios, no Local Enhanced path, no lightweight-parser fallback on the live UI.
+- **DI pipeline**: Two-leg path in `App/bank_statements.py` + `App/azure_document_intelligence.py` — register via `prebuilt-bankStatement.us`, imaging via geometric cropper v5 + `prebuilt-check.us` per crop. Enablement: `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1`; runbook: `docs/DI-Go-Live-Commands.md`, `docs/go-live-execution-runbook.md`.
+- **Gate A3 (check/imaging leg)**: Infrastructure verified **2026-05-30** (HTTP 200, `IMAGING_LEG poppler=ok`, PostgreSQL 98 clients / 36 requests). Final **`SMOKE_EVIDENCE` verdict pending** — run `Collect-GateA3Evidence.ps1 -Both -UpdateDocs` after deploy + minimal browser smoke. Detail: `docs/handoffs/gate-a3-full-autonomous-closure-2026-05-30.md`.
+- **Data layer**: Azure PostgreSQL (`USE_POSTGRES=true`); canonical schema in `db/schema.sql` and `docs/data-model.md`.
+- **Daily driver (Laura/Stef)**: Dashboard, Revenue Requests, Bank Statements, payee rules on App Service (B2). QMS visibility in sidebar + `health_check.py --qms` (O-002, v2.44.21).
+
+### Local Enhanced (Robert's Windows machine only)
+
+- **Heavy OCR + hybrid CV**: `App/local_enhanced_ocr.py` — full intelligent check-linking pipeline, Azure CV Read on check crops when `AZURE_CV_*` or `SLAM_CV_CACHE_DIR` in `.env`. Install via `Setup-LocalVenv.ps1 -InstallHeavyOcr` / `Install-LocalHeavyOcr.ps1`. **Not wired into production Streamlit UI.**
+- **G1 spike artifacts**: Phases 0–7 complete under `Scripts/spike/` (CV round-trip v2.44.13 documented in Blueprint Change Log; no `Documents/` folder in repo).
+
+### Parked / fallback
+
+- **Azure OCR Function** (`slam-ocr-function`): parked; not the production path.
+- **CSV mode**: zero-disruption fallback when Postgres is disabled (requires server-side CSVs — not for daily driver).
+
+**Full history**: Blueprint Change Log (v2.30 → **v2.44.25**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
 
 ---
 
@@ -92,7 +99,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 - `Scripts/PowerShell/Deploy-ToAzure.ps1` + `Build-AzureDeployZip.ps1` — modern safe deploy path.
 - `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1` — one-command production enablement for the Azure Document Intelligence bank statement pipeline (post-2026 go-live).
 - `db/schema.sql` — canonical, production-grade definition of the current live Postgres schema (clients + revenue_requests with the bank/sales received flags).
-- `docs/deployment.md`, `docs/DI-Go-Live-Commands.md`, `docs/local-development.md`, and `docs/proposed-state-alignment-process.md` — detailed operational recipes, the exact go-live command sequence, and future-process proposals.
+- `docs/deployment.md`, `docs/DI-Go-Live-Commands.md`, `docs/local-development.md`, and [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) — operational recipes, go-live sequence, and active State Alignment process.
 - `.cursor/rules/slam-services.mdc` and `.grok/AGENT.md` — the two thin agent contracts.
 - `Data/Revenue_Tracker_Migration/` — source CSVs (local only; never committed).
 
@@ -133,7 +140,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 ├── docs/                          # Detailed operational guides (extracted from old README)
 │   ├── deployment.md              # All Azure deploy paths + recovery runbooks
 │   ├── local-development.md       # Local venv, Postgres dev workflow
-│   └── proposed-state-alignment-process.md  # Lightweight future template for proactive doc/feature gap reviews (not yet active)
+│   └── (State Alignment: QMS/State-Alignment/process.md — active)
 ├── CONSTITUTION.md
 ├── README.md                      # You are here (onboarding + roles matrix)
 ├── SLAM Services - Digital Transformation Blueprint.md
@@ -163,7 +170,7 @@ This is the **single authoritative map** of every document’s defined purpose. 
 
 - [docs/local-development.md](docs/local-development.md) — Local venv, Local Enhanced OCR one-time install, PostgreSQL round-trip testing, health commands.
 - [docs/deployment.md](docs/deployment.md) — Modern `Deploy-ToAzure.ps1` path, manual steps, GitHub Actions, Kudu data uploads, full `RemoteDisconnected` recovery runbook, important App Settings.
-- [docs/proposed-state-alignment-process.md](docs/proposed-state-alignment-process.md) — Minimal template for the future proactive state-driven documentation/feature alignment system (logged as future work in Blueprint).
+- [QMS/State-Alignment/process.md](QMS/State-Alignment/process.md) — Active State Alignment process (QMS continual improvement; superseded `docs/proposed-state-alignment-process.md`).
 
 All long-form historical narrative, architecture rationale, and detailed decision records live in the **Blueprint**.
 

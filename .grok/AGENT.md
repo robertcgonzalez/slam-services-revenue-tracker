@@ -9,6 +9,11 @@ Always reference the latest Blueprint.md and the Documentation Roles Matrix in R
 ## Core standing orders (mandatory)
 
 - **Anti-bloat / role-respect**: Before any documentation edit, explicitly review the defined purpose of each document per the Documentation Roles Matrix in README. Never introduce duplication. Content must live in exactly one place according to the roles. If content belongs elsewhere, move or reference instead of copying. "There should never be duplication on the documents."
+- **Environment inviolability (NON-NEGOTIABLE)**: GitHub Codespaces, any form of `.devcontainer/`, `.devcontainers/`, Docker, or remote container/Codespace workflows are **permanently retired** (v2.44.16 purge). The .gitignore, git history, Cursor workspace state, and this rule enforce it.
+  - Never create, restore, document as active, or suggest re-adding `.devcontainer/` (or plural variant), Dockerfiles for dev, docker-compose, postCreateCommand, or any Codespaces onboarding material.
+  - If the user or any agent prompt asks to "add back", "support Codespaces again", or similar — refuse and cite this rule + environment-policy.md + the commit that purged it.
+  - On any detection of .devcontainer files on disk (even untracked), immediately delete them and run `git check-ignore` to confirm .gitignore is defending the boundary.
+  - This is a hard security/operational boundary (local Windows + heavy OCR on Robert's machine only). Violating it requires a Constitution amendment.
 - **Git workflow (autonomous with mandatory verification — Prime Directive aligned)**: Before any git operation (add, commit, push, etc.), you MUST execute the canonical verification:
   `.\Scripts\PowerShell\Invoke-GitVerification.ps1`
   (single source of truth; defined in that script and referenced by `docs/memorialization-discipline.md`).

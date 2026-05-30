@@ -27,4 +27,4 @@
 
 - Default to **local Windows** instructions (PowerShell, `run_local.ps1`, `.env`).
 - Do not require or document Codespaces, Docker, or remote dev-container connections for validation or testing.
-- `App/app.py` loads repo-root `.env` via `python-dotenv` on startup.
+- Repo-root `.env` is loaded by `run_local.ps1` (PowerShell parse + preflight `load_dotenv`) and by `App/bank_statements.py` on import (`load_dotenv` at module init). `App/app.py` does not load `.env` directly.

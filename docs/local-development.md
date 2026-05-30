@@ -27,7 +27,7 @@ copy Scripts\spike\cv-read.env.sample .env
 .\run_local.ps1
 ```
 
-`run_local.ps1` activates `.venv`, loads `.env`, sets `PYTHONPATH=App`, and checks for `pdftoppm`. `App/app.py` also loads `.env` on startup.
+`run_local.ps1` activates `.venv`, loads `.env`, sets `PYTHONPATH=App`, and checks for `pdftoppm`. `App/bank_statements.py` also calls `load_dotenv` on import (covers Bank Statements env vars when Streamlit starts without `run_local.ps1`).
 
 Heavy stack only (if venv already exists): `.\Scripts\PowerShell\Install-LocalHeavyOcr.ps1`
 
@@ -137,6 +137,7 @@ python Scripts/health_check.py --csv     # validates CSV fallback path
 ## Related Files
 
 - `App/local_enhanced_ocr.py` — the in-process v2.44.3 pipeline (heavy-OCR path)
+- `App/payee_extractor/` — payee scoring (Local Enhanced only); requires `PyYAML` locally, not in production `requirements.txt`
 - `Scripts/test_local_ocr_regression.py` — regression harness (run on local Windows)
 - [environment-policy.md](environment-policy.md) — official dev-environment policy
 

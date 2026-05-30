@@ -81,7 +81,7 @@ Keep updates factual, versioned, and focused — no speculative rewrites. Always
 
 - App changes → run Streamlit locally on Windows (`.\run_local.ps1` or `streamlit run App/app.py` with `.venv` active).
 - Python changes → `ruff check` / `ruff format` on `App` and `Scripts`.
-- Deploy-related changes → confirm zip layout (`requirements.txt`, `App/`, `Data/`, `startup.sh` at root).
+- Deploy-related changes → confirm zip layout matches `Build-AzureDeployZip.ps1`: root `requirements.txt`, `runtime.txt`, `startup.sh`, `apt.txt`, `App/`, `Scripts/`; **Data/ omitted by default** (code-only deploy; server CSVs preserved via `clean: false`). Use `-IncludeData` only to bootstrap a new slot.
 - Heavy Local Enhanced OCR / hybrid CV → local Windows with `Install-LocalHeavyOcr.ps1` and poppler on PATH only. **Any .devcontainer/ or Codespaces reference is a violation — delete on sight and re-assert the purge.**
 
 ## Style

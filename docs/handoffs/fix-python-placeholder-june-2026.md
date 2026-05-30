@@ -1,5 +1,7 @@
 # Handoff — Fix Default Python Placeholder Page (Current Deployment)
 
+> **SUPERSEDED (2026-05-30):** This handoff assumed `Deploy-ToAzure.ps1` should **not** set `appCommandLine`. Gate A3 work restored the canonical policy: production requires **`appCommandLine = ./startup.sh`** when Oryx compresses the build. See **`docs/deployment.md`** (Managing the Azure Startup Command). Recovery: `Set-AzureStartupCommand.ps1` or redeploy via `Deploy-ToAzure.ps1` — not clear-to-empty.
+
 **Date**: 2026-06 (current session)  
 **Symptom**: Live site `slam-services-revenue-tracker.azurewebsites.net` shows the classic Azure "Hey, Python developers!" placeholder page with the cartoon illustration instead of the SLAM Revenue Tracker Streamlit UI.  
 **Target**: Cursor (primary driver via dual-agent orchestrator)  

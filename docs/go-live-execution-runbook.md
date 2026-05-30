@@ -7,49 +7,30 @@
 
 ---
 
-## Current execution state + next autonomous steps (2026-05-29, updated post data layer)
+## Current execution state (2026-05-29)
 
 | Layer | State |
 |-------|--------|
 | Gate A1 (B2) | **Done** |
 | Gate A2 (P0 imaging deploy) | **Done** — OpenCV, pdf2image, Poppler, page clamping, code-only deploys |
 | **Data layer** | **DONE** — `Invoke-DataLayerGoLive.ps1` executed; `slam-services-db` (centralus); **98 clients / 36 requests** migrated; `USE_POSTGRES=true`; app healthy on B2 |
-| **Gate A3 (re-smoke)** | **ONLY REMAINING HARD GATE** — Live Robert re-smoke on production with the two real PDFs. All P0 imaging fixes deployed. |
+| **Gate A3 (re-smoke)** | **Infrastructure PASS (2026-05-30)** — App Service Running, HTTP 200, `IMAGING_LEG poppler=ok`, PostgreSQL 98/36. **Final verdict PENDING** — `SMOKE_EVIDENCE` / DI totals not yet collected via `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`. See [`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md). |
 
-**See new dedicated artifacts:** `docs/gate-a3/` (Pre-Smoke Checklist + Evidence Template + Post-Smoke Scorecard Scaffolding + Launch Directive).
+### Gate A3 minimal-interaction flow (2026-05-29+)
 
-**Easiest launch command (from repo root):**
-```powershell
-.\Scripts\Launch-GateA3Orchestration.ps1
-```
+1. **Agents or owner — deploy + verify:** `Build-AzureDeployZip.ps1` → `Deploy-ToAzure.ps1 -TimeoutSeconds 900` → `Test-GateA3Poppler.ps1 -RestartIfLogMissing`
+2. **Owner-only — browser:** Bank Statements → upload + **Process Statement** for `HCC 2026-04.pdf` and `Auto_Body_Center_Jan_26_Statement.pdf` (no screenshots, CSV downloads, or log copy).
+3. **Agents or owner — collect:** `.\Scripts\PowerShell\Collect-GateA3Evidence.ps1 -Both -UpdateDocs` (harvests Kudu logs, fills evidence guide + scorecard, writes `deploy-logs-temp\gate-a3-intake-bundle.json`).
 
-**Status note:** Data layer cut-over complete via `Invoke-DataLayerGoLive.ps1`. Production is now on PostgreSQL. The only remaining blocker for full imaging + register DI daily driver use is Gate A3 validation of the check/imaging leg after all P0 fixes.
+**Supporting artifacts:**
+- [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md) — deploy + minimal smoke sequence
+- [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) — auto-filled by collector
+- [`Scripts/PowerShell/Collect-GateA3Evidence.ps1`](../Scripts/PowerShell/Collect-GateA3Evidence.ps1) — autonomous evidence harvest
+- [`Scripts/PowerShell/Test-GateA3Poppler.ps1`](../Scripts/PowerShell/Test-GateA3Poppler.ps1) — imaging leg probe (`-CheckSmokeEvidence` after smoke)
 
-### Gate A3 Preparation (Current Focus)
+Diagnosis, 2026-05-29 baseline evidence, and poppler/assembly fix notes: **Handoff → Gate A3** sections below.
 
-All supporting material lives in `docs/gate-a3/`:
-
-- **Gate-A3-Orchestration-Launch-Directive.md** — Primary launch artifact for `grok -p` or Cursor.
-- **Gate-A3-Pre-Smoke-Checklist-and-Evidence-Template.md** — What the human uses during the live smoke.
-- **Gate-A3-Post-Smoke-Scorecard-Scaffolding.md** — Cursor completes this after results are pasted.
-- Additional diagnostic and decision material as needed.
-
-**Cursor standing order:** Keep these artifacts and this runbook in sync. The runbook is the single source of truth for status; the `gate-a3/` folder contains the detailed working templates.
-
-### Owner minimum path (one command + one password + re-smoke)
-
-```powershell
-cd C:\SLAM-Services-Project
-.\Scripts\PowerShell\Invoke-DataLayerGoLive.ps1
-```
-
-1. Enter the **PostgreSQL admin password once** when prompted (provision + migrate + App Service settings).
-2. Wait for P1–P5 to finish (~15–45 min; first Postgres create can take several minutes).
-3. **You only:** Gate A3 re-smoke on the live URL (both PDFs); paste the report template at the bottom of this runbook.
-
-Dry-run (no Azure changes): `.\Scripts\PowerShell\Invoke-DataLayerGoLive.ps1 -WhatIf`
-
-**Owner signal for Cursor to execute P1–P5 on your machine:** `provision Postgres now` (Cursor runs the same script; you enter the password at the prompt).
+**After collector runs:** Review auto-filled [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md), record final verdict here, propose Path A/B (commit only if owner approves).
 
 ### Execution log (data layer — live)
 
@@ -61,32 +42,14 @@ Dry-run (no Azure changes): `.\Scripts\PowerShell\Invoke-DataLayerGoLive.ps1 -Wh
 | 2026-05-29 | P3 app settings | **PASS** — `USE_POSTGRES=true`, `POSTGRES_HOST`, `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_SSLMODE`, `POSTGRES_PASSWORD` (portal only) |
 | 2026-05-29 | P4 deploy | **PASS** — code-only `slam-app.zip` clean deploy; Kudu `complete=true` |
 | 2026-05-29 | P5 health | **PASS** — App Service **Running**; local PG counts match migration |
-| 2026-05-29 | Gate A3 | **PENDING** — owner re-smoke (see template at end of runbook) |
+| 2026-05-29 | Gate A3 | **Owner re-smoke executed** — evidence paste pending analysis |
+| 2026-05-30 | Gate A3 | **Infrastructure PASS** — SP deploy (`e74643bd`); HTTP 200; poppler OK; Oryx startup fix in repo. **DI smoke evidence PENDING** — [`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md) |
 
 **Notes:** Admin password is in repo-root `.env` (gitignored) only. If laptop cannot reach TCP/5432, use `Scripts/PowerShell/Invoke-PostgresMigrateViaAci.ps1` (blob + one-shot ACI). Removed `AllowAllTemp` firewall rule after migration.
 
-### Cursor — ready now (no owner signal required)
+### Cursor — after owner pastes Gate A3 re-smoke evidence
 
-| Action | Status |
-|--------|--------|
-| `Invoke-DataLayerGoLive.ps1` orchestrator | **Done** (P1–P5) |
-| `Invoke-PostgresMigrateViaAci.ps1` | **Added** — fallback when outbound :5432 blocked |
-| Local preflight | **Done** (see execution log) |
-| Runbook SSOT update + Gate A3 artifacts | `docs/gate-a3/` integrated (checklist, template, scorecard, launch directive) |
-| Blueprint/README `apply docs` | **Deferred** until Gate A3 PASS |
-
-### Cursor — after owner says `provision Postgres now`
-
-1. Run `Invoke-DataLayerGoLive.ps1` (or `-SkipProvision` if server already exists).
-2. Log verification: App Settings key names only; deploy id from `az webapp log deployment list`; HTTP 200.
-3. Update runbook running log (P1–P4 dates/results); Final production state → PostgreSQL.
-4. Prepare Gate A3 artifacts in `docs/gate-a3/` (checklist, evidence template, scorecard scaffolding) and link them from this runbook.
-
-### Cursor — after owner pastes Gate A3 re-smoke report
-
-1. Use the artifacts in `docs/gate-a3/`:
-   - Pre-Smoke Checklist + Evidence Template (human fills during smoke)
-   - Post-Smoke Scorecard Scaffolding (Cursor completes after results pasted)
+1. Use [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) (owner-filled) and complete [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md).
 2. Update this runbook with final Gate A3 verdict, check/imaging leg status, and Path recommendation.
 3. **Propose** exact commit scope + message and `apply docs` decision (only execute after human approval and only on Path A success).
 
@@ -341,12 +304,12 @@ Grok Vision paste and lightweight parser remain available as fallbacks when DI i
 | DI SKU | **S0** |
 | App Service tier | **B2** (upgraded **2026-05-29**, Cursor/`az`; Always On true; start limit 1800) |
 | `AZURE_DI_*` on App Service | **Set** (Phase 2) |
-| Latest code deploy | OneDeploy **bd23f330** **2026-05-29** (~06:49 UTC); **P0 imaging code deployed** (2.45 MB code-only zip) |
-| Register DI on live URL | **Partial / inconsistent** |
-| Check/imaging DI on live URL | **Deployed — awaiting Gate A3 re-smoke** (P0 deps + page clamp on B2) |
+| Latest code deploy | OneDeploy **`e74643bd`** **2026-05-30** (Oryx startup re-seed fix); prior **`c6b525f7`** 2026-05-29; P0 deploy **`bd23f330`** |
+| Register DI on live URL | **TBD** — awaiting `Collect-GateA3Evidence.ps1` harvest |
+| Check/imaging DI on live URL | **Infrastructure OK** (poppler verified 2026-05-30); **verdict PENDING** DI smoke evidence |
 | Path | **Path A** (approved); B2 upgrade plan approved **2026-05-29** |
-| Data layer (production) | **CSV mode, no files on server** — **blocked**; Postgres not provisioned |
-| Go-live complete for daily driver? | **No** — data layer + Gate A3 re-smoke |
+| Data layer (production) | **PostgreSQL** — `slam-services-db` (centralus, Ready); `USE_POSTGRES=true`; **98 clients / 36 requests** migrated |
+| Go-live complete for daily driver? | **No** — Gate A3 `SMOKE_EVIDENCE` verdict pending (infrastructure criteria met) |
 
 ---
 
@@ -363,7 +326,9 @@ Grok Vision paste and lightweight parser remain available as fallbacks when DI i
 | A0 | 2026-05-29 | P0 code in repo | Imaging deps, apt.txt, page clamp, deploy scripts — **not deployed** |
 | A1 | 2026-05-29 | B1→B2 + settings | **Done** — sku=B2, alwaysOn=true, `WEBSITES_CONTAINER_START_TIME_LIMIT=1800` |
 | A2 | 2026-05-29 | Code-only deploy | **Done** — `bd23f330`, 2.45 MB zip; Kudu "Deployment successful"; HTTP 200 |
-| A3 | — | Robert re-smoke (live URL) | **Ready** — owner runs smoke; paste report template |
+| A3 | 2026-05-29 | Robert re-smoke (live URL) | **Executed** — both PDFs processed; screenshots + CSV exports owner-held; evidence paste pending |
+| A3b | 2026-05-29 | Cursor autonomous review | **Done** — diagnosis, poppler fix, assembly fix, owner execution package |
+| A3c | 2026-05-30 | Full autonomous closure (SP) | **Infrastructure PASS** — app started, Postgres synced, deploy + poppler OK; DI smoke evidence pending ([`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md)) |
 | 5–8 | — | Schema / pilot / rename / rollback test | Not completed or blocked |
 
 ---
@@ -374,13 +339,129 @@ This runbook + `docs/DI-Go-Live-Commands.md` + `docs/deployment.md` + `db/schema
 
 **Blueprint:** See v2.44.20 Change Log entry (corrects v2.44.19 planning text).
 
-**Before Laura pilot:** Resolve P0 blockers (OpenCV on App Service, page-range clamping), re-run Phase 4 smoke until **check/imaging leg passes**, then schedule pilot per `docs/DI-Go-Live-Commands.md` Step 6.
+**Gate A3 autonomous work (2026-05-29–30):** Complete per handoffs in `docs/handoffs/gate-a3-*.md` — production CLI validation, DI totals root cause, poppler reliability fix, assembly hardening, Oryx startup re-seed, full autonomous closure session **2026-05-30** ([`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md)). **Infrastructure criteria met** (HTTP 200, poppler OK, Postgres OK). **Final Gate A3 verdict pending** — run `Collect-GateA3Evidence.ps1 -Both -UpdateDocs` after minimal browser smoke on the two canonical PDFs.
+
+**Before Laura pilot:** Gate A3 verdict must confirm **check/imaging leg passes** on re-smoke evidence; then schedule pilot per `docs/DI-Go-Live-Commands.md` Step 6.
+
+### Gate A3 — DI Totals Discrepancy Diagnosis (2026-05-29, Cursor implementer)
+
+**Symptom (owner re-smoke):** Summary totals beneath the Processing log / register-only view looked correct; the banner metrics, `data_editor` table, and **Download transactions CSV** showed inflated withdrawal totals (all three matched each other).
+
+**Root cause:** Two-leg assembly in `_run_azure_ocr_via_document_intelligence` (`App/bank_statements.py` ~2308–2340). After the register pass (`analyze_bank_statement_pdf`), the pipeline always concatenated “supplemental” check-image rows from `checks_to_transaction_rows`. Azure DI register output **does not populate `Check#`** on Traditions-style PDFs, so every imaging-leg row appeared “unmatched” and was appended—even though the register pass already included those withdrawals as generic debits. On production (geometry cropper active, ~50+ crops), this double-counted withdrawals and jacked up totals. Payee rules (`apply_payee_rules` → `Data/payee_rules.csv`) touch **Payee/Category only**—not amounts—confirmed not the corruption source.
+
+**Call chain (wrong totals):** `app.py` `_run_bank_statement_azure_process` (L2419) → `run_azure_ocr_pipeline` → `_run_azure_ocr_via_document_intelligence` → register pass + cropper + check pass → `combined = register_txns + supplemental_check_txns` → `_parse_ocr_response_to_df` → `st.session_state["bank_stmt_txn_df"]` → `transaction_summary_metrics` / `data_editor` / Download CSV (L2167, L2302, L2317).
+
+**Correct totals source:** Register-leg `register_txns` immediately after `analyze_bank_statement_pdf` (logged as `Register pass: N transaction(s)`). Deposits already matched gold on Auto Body ($41,786.80); supplemental append was corrupting withdrawals.
+
+**Minimal fix (in repo, not deployed):**
+1. **`App/bank_statements.py`:** Append supplemental check rows **only when** `len(register_txns) < 3` (sparse register). Otherwise register pass is authoritative for totals; imaging leg runs `_merge_azure_checks_into_transactions` for payee enrichment only. Normalize check numbers via `_normalize_check_number` when matching.
+2. **`App/azure_document_intelligence.py`:** `analyze_checks_from_crop_directory` reads PNGs from `checks/` subfolder (cropper moves files out of root)—restores per-crop DI on production.
+
+**Timing (~1 min/PDF):** Logged in Processing log as `Register pass: …` (includes `duration_sec` from Azure DI meta) and check-pass lines (`Check pass (document_intelligence_crops): …`); `log_event` keys `bank_stmt_azure_di_request` / `bank_stmt_azure_di_response` / `bank_stmt_azure_di_pipeline_done`.
+
+**Rollback test:** Exercise `-DisableDI` once before the next owner smoke so the team has a verified fallback if the patched assembly misbehaves on an edge-case PDF.
+
+**Deploy:** Patch requires code deploy to App Service; owner re-smoke both PDFs after deploy to confirm UI totals match register pass.
 
 ---
 
-## Data layer failure — post B2 deploy (2026-05-29, diagnosed)
 
-**Symptom:** After login, app shows **Critical: CSV files — not found** (or stops before Bank Statements). Gate A3 re-smoke **blocked**.
+---
+
+**GATE A3 AUTONOMOUS PHASE COMPLETE — OWNER ACTION REQUIRED**
+
+All fixes (assembly double-counting + poppler reliability on App Service) are in the current source tree.
+
+**Single handoff document:**
+→ [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md)
+
+Copy the sequence in that file:
+1. Deploy current source + run `Test-GateA3Poppler.ps1`
+2. Confirm `IMAGING_LEG poppler=ok`
+3. Re-smoke both PDFs (HCC 2026-04.pdf and Auto Body Jan 26)
+4. Fill `Gate-A3-Final-Re-Smoke-Evidence-Guide.md`
+5. Paste results back for final scorecard + verdict.
+
+Everything else below this line is historical context or superseded.
+
+---
+
+**Gate A3 — Owner Re-Smoke Evidence (2026-05-29)**
+
+Owner performed live re-smoke on both target PDFs and exported the following to `deploy-logs-temp/` as baselines:
+
+**HCC 2026-04.pdf** (Hernandez Custom Concrete)
+- Processing Log (owner-provided):
+  - Register pass: **98 transaction(s)** from Azure DI (pages 1-4).
+  - Check cropper skipped: poppler (pdftoppm) not on PATH.
+  - Check pass: **0 check(s)** from imaging pages 5-7.
+  - Combined: **98 register + 0 supplemental**.
+  - Duration: 27.48s.
+- Export CSV: `2026-05-29T20-11_export.csv` (98 rows, deposits $163,914, withdrawals $45,703.76, 0 Check#).
+- Imaging leg completely disabled in this run due to missing poppler in the App Service container.
+
+**Auto_Body_Center_Jan_26_Statement.pdf**
+- Export CSV: `2026-05-29T20-08_export.csv` (49 rows, deposits $43,860.64, withdrawals $16,633.49, 2 unique Check#).
+- Gold baseline (Grok Vision + hardened parser): 92 transactions, deposits $41,786.80, withdrawals $41,403.63, ~49-56 checks.
+- This output shows the familiar lower transaction count and suppressed withdrawal total seen in prior incomplete DI runs.
+
+**Additional context from owner**
+- UI showed "Version v2.44 · Mode: postgresql" (APP_VERSION string + data mode, **not** the Kudu/Azure deploy ID. Real IDs are GUIDs such as c6b525f7...).
+- Screenshots from the exact UI the owner saw during the re-smoke (including the "correct" vs "jacked" summary discrepancy) are also in `deploy-logs-temp/`.
+
+**Critical deployment finding**: The production App Service container is missing `poppler` (pdftoppm). This hard-disables the geometric cropper v5 step. Consequently the entire paid-tier imaging leg (per-crop `prebuilt-check.us`) never executes on live, regardless of code. This is why HCC produced 0 crops/supplemental rows.
+
+The two main export CSVs above are now the authoritative record of this re-smoke for scorecard purposes. The 49-row Auto Body output and the clean 98-row HCC register-only output can be directly compared to the historical gold baselines.
+
+### Gate A3 — Poppler Reliability Task – Complete via Orchestrator (2026-05-29)
+
+Dual-agent handoff executed: `docs/handoffs/gate-a3-make-poppler-reliable-app-service.md`
+
+**Root cause confirmed**: Production `startup.sh` had an `AZURE_PROD=true` branch that skipped runtime `apt-get`, assuming Oryx + `apt.txt` would deliver `poppler-utils`. It did not. Result: cropper disabled on every container start → imaging leg never ran (directly observed in 2026-05-29 re-smoke: "Check cropper skipped: poppler (pdftoppm) not on PATH").
+
+**Fix applied (via Cursor implementer)**:
+- `startup.sh`: Removed the production skip. Probe now always attempts timed `apt-get install poppler-utils` (20s update + 45s install) with structured logging:
+  - `IMAGING_LEG poppler=ok` → geometric cropper v5 + per-crop DI enabled.
+  - `IMAGING_LEG poppler=missing` → register-only DI.
+- `Deploy-ToAzure.ps1`: Added `Test-PopplerViaKudu` post-deploy probe (non-fatal).
+- Runbook updated with verification steps and owner deployment note.
+
+**Owner deploy + verify + re-smoke:** [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md) (authoritative copy-paste sequence).
+
+### Gate A3 — Path to Final Verdict (context; owner steps in execution package)
+
+**Two blockers identified in the 2026-05-29 re-smoke — both fixed in current source, awaiting one owner deploy:**
+
+| # | Blocker | Before (2026-05-29 evidence) | Fix (in repo) |
+|---|---------|-------------------------------|---------------|
+| 1 | **Poppler missing** — imaging leg never ran | HCC log: `Check cropper skipped: poppler (pdftoppm) not on PATH` → 98 register + 0 supplemental | `startup.sh`: always attempt timed `apt-get install poppler-utils` even in prod fast-path; emit `IMAGING_LEG poppler=ok` / `poppler=missing` |
+| 2 | **Assembly double-counting** — jacked UI totals | Auto Body: banner/table/Download CSV showed inflated withdrawals; per-file register view correct. Traditions PDFs omit Check# on register pass → all check-leg rows appended as supplemental | `App/bank_statements.py`: supplemental check rows only when register sparse (`< 3` rows); payee merge-only otherwise |
+
+**2026-05-29 before baseline (owner-held in `deploy-logs-temp/`):**
+- **HCC 2026-04.pdf:** 98 register + 0 supplemental · cropper skipped · export 98 rows · withdrawals $45,703.76
+- **Auto Body Jan 26:** 49 rows · deposits $43,860.64 · withdrawals $16,633.49 vs gold 92 txns / $41,786.80 / $41,403.63
+- UI screenshots show correct numbers in some per-file views vs wrong banner + table + main Download CSV
+
+#### Success criteria — next owner re-smoke
+
+| PDF | Expect |
+|-----|--------|
+| **HCC 2026-04.pdf** | Cropper runs (no poppler skip) · check-pass on imaging pages · non-zero crops/supplemental where pages exist · no page-range error |
+| **Auto Body Jan 26** | Row count and deposit/withdrawal totals **closer to gold** (92 / $41,786.80 / $41,403.63) · banner metrics = table = Download CSV (no jacked mismatch) |
+
+Owner fills [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) and pastes results (see execution package). Cursor completes [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md) → final verdict + Path A/B.
+
+### Gate A3 Verdict (pending)
+
+*Placeholder — Cursor fills after owner pastes completed [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) and key Processing log excerpts.*
+
+---
+
+## Data layer failure — post B2 deploy (2026-05-29, diagnosed) — RESOLVED
+
+> **Resolved 2026-05-29:** `Invoke-DataLayerGoLive.ps1` completed P1–P5; production on PostgreSQL (`slam-services-db`, 98 clients / 36 requests). Retained for audit trail only.
+
+**Symptom (historical):** After login, app showed **Critical: CSV files — not found** (or stopped before Bank Statements). Gate A3 re-smoke was **blocked**.
 
 ### Root cause (confirmed via App Service settings + code + subscription inventory)
 
@@ -395,7 +476,13 @@ This runbook + `docs/DI-Go-Live-Commands.md` + `docs/deployment.md` + `db/schema
 
 **Conclusion:** The app is non-functional for UAT because production still assumes **CSV-on-wwwroot**, but we intentionally stopped shipping client files to App Service. **PostgreSQL was planned (v2.30) but never provisioned or wired on this web app.**
 
-### Recommended path forward (no client CSV on App Service)
+---
+
+**Gate A3 — Poppler Reliability Fix (duplicate section removed)**
+
+> **Superseded:** Full poppler fix narrative is under **Handoff → Gate A3 — Poppler Reliability Task** above. Owner deploy/verify/re-smoke: [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md).
+
+### Recommended path forward (no client CSV on App Service) — DONE
 
 **Primary (aligns with architecture):**
 
@@ -412,24 +499,23 @@ This runbook + `docs/DI-Go-Live-Commands.md` + `docs/deployment.md` + `db/schema
 
 **Optional hardening (repo):** `data_paths.py` error text updated to point at Postgres migration, not Kudu CSV upload. `Deploy-ToAzure.ps1` adds **`-CleanDeploy`** (`az webapp deploy --clean true`) to remove stale wwwroot folders on code-only pushes.
 
-### Gate status impact
-
 | Gate | Status |
 |------|--------|
 | A1 B2 | Done |
-| A2 P0 deploy | Done (imaging code live) |
-| **Data layer** | **BLOCKED** — Postgres package ready (below) |
-| A3 re-smoke | Waiting on data layer |
+| A2 P0 deploy | Done |
+| **Data layer** | **Done** (2026-05-29) |
+| A3 re-smoke | **Pending owner** — [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md) |
 
 ---
 
-## PostgreSQL provisioning package (Path A — data layer unblock)
+## PostgreSQL provisioning package (Path A — data layer unblock) — DONE
+
+> **Completed 2026-05-29** via `Invoke-DataLayerGoLive.ps1`. Retained as reference for rollback/re-provision.
 
 **Policy:** Client CSVs stay on Robert’s laptop (`Data/Revenue_Tracker_Migration/`, gitignored). **Never** bundle `Data/` in App Service deploys. Data lives in **Azure PostgreSQL** only.
 
 **End-to-end wrapper (preferred):** `Scripts/PowerShell/Invoke-DataLayerGoLive.ps1`  
-**Granular script:** `Scripts/PowerShell/Provision-AzurePostgres.ps1` (P1 only)  
-**Owner trigger for Cursor to run P1-P5:** say **`provision Postgres now`**
+**Granular script:** `Scripts/PowerShell/Provision-AzurePostgres.ps1` (P1 only)
 
 ### Phase P1 — Create server (Azure CLI)
 
@@ -518,15 +604,15 @@ Live: https://slam-services-revenue-tracker.azurewebsites.net/ — sidebar **Dat
 
 ### Phase P5 — Gate A3 (owner only)
 
-Robert re-smoke both PDFs; paste report per **Gate A3 — owner report template** below.
+Robert: deploy + verify + re-smoke per [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md); paste completed [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md).
 
-### After data layer — Cursor autonomous steps
+### After data layer — status
 
-| Step | Owner | Cursor |
-|------|-------|--------|
-| P1–P5 Full data layer | Run `Invoke-DataLayerGoLive.ps1` **or** say `provision Postgres now` | Same script when triggered; password at your prompt only |
-| P2 only (server exists) | `Invoke-DataLayerGoLive.ps1 -SkipProvision` | — |
-| Gate A3 Re-smoke | Browser + PDFs | Analyze pasted report only |
+| Step | Status |
+|------|--------|
+| P1–P5 Full data layer | **Done** (2026-05-29) |
+| Gate A3 final deploy + re-smoke | **Infrastructure done (2026-05-30)** — DI smoke evidence **pending** ([`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md)) |
+| Gate A3 scorecard + verdict | **Pending** — after `Collect-GateA3Evidence.ps1 -Both -UpdateDocs` |
 
 ### Rollback
 
@@ -537,16 +623,16 @@ Robert re-smoke both PDFs; paste report per **Gate A3 — owner report template*
 
 | Phase | Date | Result |
 |-------|------|--------|
-| P1 Provision | — | Pending |
-| P2 Migrate | — | Pending |
-| P3 App settings | — | Pending |
-| P4 Redeploy | — | Pending |
+| P1 Provision | 2026-05-29 | **Done** |
+| P2 Migrate | 2026-05-29 | **Done** |
+| P3 App settings | 2026-05-29 | **Done** |
+| P4 Redeploy | 2026-05-29 | **Done** |
 
 ---
 
 ## Path A execution record — B2 + deploy (2026-05-29)
 
-**Executor:** Cursor (`az` CLI + deploy scripts). **Gate A3:** pending owner re-smoke.
+**Executor:** Cursor (`az` CLI + deploy scripts). **Gate A3:** infrastructure PASS 2026-05-30; DI smoke evidence pending.
 
 ### A1 — B1→B2 infrastructure
 
@@ -579,13 +665,13 @@ Robert re-smoke both PDFs; paste report per **Gate A3 — owner report template*
 2. **`az webapp deploy` can block the shell** even with `--async true`; confirm via `az webapp log deployment list` before re-uploading.
 3. **First Process Statement after deploy** may be slow (`startup.sh` pip install on container recycle).
 
-**Production-ready for check leg?** **No** until Gate A3 re-smoke passes (see criteria below).
+**Production-ready for check leg?** **No** until Gate A3 `SMOKE_EVIDENCE` collected and verdict recorded (infrastructure verified 2026-05-30).
 
 ---
 
 ## Code changes in P0 deploy (2026-05-29)
 
-**Status:** **Deployed** to production (deploy `bd23f330`). **Check/imaging leg verdict:** pending Gate A3.
+**Status:** **Deployed** to production (deploy `e74643bd` 2026-05-30; prior `bd23f330`). **Check/imaging leg verdict:** infrastructure OK; DI smoke evidence pending Gate A3 collector.
 
 | Change | Files |
 |--------|--------|
@@ -698,11 +784,7 @@ Expect **15–30+ min** first heavy deploy on B2 (Oryx + OpenCV wheels).
 
 ## Gate A3 — Robert re-smoke checklist (production URL)
 
-> **Superseded:** The detailed modern checklists, evidence templates, and post-smoke scorecards now live in `docs/gate-a3/`.
-> Use `.\Scripts\Launch-GateA3Orchestration.ps1` to generate the current versions.
-> The content below is retained only for historical reference from the original Phase 4 smoke.
-
-**Current recommended material:** See `docs/gate-a3/Gate-A3-Pre-Smoke-Checklist-and-Evidence-Template.md` and the Post-Smoke Scorecard Scaffolding.
+> **Superseded:** Owner handoff is [`docs/gate-a3/Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md). Evidence: [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md). Scorecard: [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md).
 
 **URL:** https://slam-services-revenue-tracker.azurewebsites.net/  
 **PDFs (local, do not commit exports):** `Data/Auto_Body_Center_Jan_26_Statement.pdf`, `Data/HCC 2026-04.pdf`
