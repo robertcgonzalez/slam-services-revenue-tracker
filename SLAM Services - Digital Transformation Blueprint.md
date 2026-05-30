@@ -1,10 +1,12 @@
 # SLAM Services - Digital Transformation Blueprint
 
-**Version**: 2.44.21  
+**Version**: 2.44.22  
 **Date**: June 2026  
 **Status**: **Local Windows is the sole supported development environment.** Production F1 App Service recovered (v2.44.20). **QMS activation advanced**: O-002 QMS visibility in sidebar + `health_check.py --qms`; memorialization checklist codified; first post-baseline State Alignment audit. **Cursor is primary agent**; Grok secondary.
 
 ## Change Log
+
+- **v2.44.22 (June 2026)**: **Prime Directive alignment of governance, agent contracts, dual-agent tooling, and CI settings.** Introduced canonical single-source `Scripts/PowerShell/Invoke-GitVerification.ps1` (the enforceable implementation of the mandatory verification sequence, replacing duplicated ritual text across contracts and prompts). Updated `.cursor/rules/slam-services.mdc`, `.grok/AGENT.md`, `CONSTITUTION.md`, `docs/memorialization-discipline.md`, `README.md`, dual-agent core files (orchestrator.py, README, PROJECT_STATUS, Invoke-DualAgentHandoff.ps1), the two Azure deploy workflows, and active docs/ execution prompts to reference the script and explicitly align the autonomous "verification → commit → direct push to origin main" path with the orchestrator's inviolable Prime Directive (highest law inside dual-agent runs: ZERO human handoff of any production/git step, full end-to-end execution by agents). Historical QMS/handoff/spike files untouched per Documentation Roles Matrix. All changes themselves followed the new canonical verifier (clean) + commit + push to main. Reversion to PR-gated or human-mediated model remains possible via future Constitution amendment. This closes the loop between the project's long-standing git autonomy policy and the dual-agent procedure's absolute autonomy requirements.
 
 - **v2.44.21 (May 29, 2026)**: **Project hygiene + QMS memorialization audit (Phase 1).** Evidence-based State Alignment run (`QMS/State-Alignment/runs/2026-05-29-project-hygiene-memorialization-audit.md`) identified memorialization lapse (v2.44.19–20 work uncommitted), inactive QMS feedback loop, and delayed O-002. Executed high-leverage fixes: `get_qms_status()` in `App/diagnostics.py` + sidebar **System status** block; `Scripts/health_check.py --qms` integrated into `--full`; `docs/memorialization-discipline.md` Session Close checklist with mandatory agent contract pointers; `QMS/Risk-Register.md` updated (R-006–R-008); post-incident Management Review stub; `feedback_log.csv` seeded with production outage + dual-agent process improvement rows. `.gitignore` tightened for deploy/session clutter. Full git verification + commit of outstanding v2.44.19–20 operational work. Detail in QMS run file — not duplicated here.
 
