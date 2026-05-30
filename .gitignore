@@ -168,6 +168,10 @@ deploy-logs-temp/
 git-review-v2.37.txt
 v2.37-final-review.txt
 test_fast_vs_strict.py
+Scripts/temp_*.py
+
+# G1 spike: ephemeral Cursor session prompts (canonical narrative: repo-root Spike-Report + tier-1 spike docs)
+Scripts/spike/CURSOR_PROMPT_*.md
 *_review.txt
 *review-v*.txt
 
