@@ -46,7 +46,7 @@ python Scripts/health_check.py --full
 
 - **Bank Statements**: **Azure Document Intelligence only** when `AZURE_DI_*` App Settings are set. `App/app.py` hardcodes `run_mode = "azure_ocr"` and stops with a clear error if Azure DI is not configured — no processing-mode radios, no Local Enhanced path, no lightweight-parser fallback on the live UI.
 - **DI pipeline**: Two-leg path in `App/bank_statements.py` + `App/azure_document_intelligence.py` — register via `prebuilt-bankStatement.us`, imaging via geometric cropper v5 + `prebuilt-check.us` per crop. Enablement: `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1`; runbook: `docs/DI-Go-Live-Commands.md`, `docs/go-live-execution-runbook.md`.
-- **Gate A3 (check/imaging leg)**: Infrastructure verified **2026-05-30** (HTTP 200, `IMAGING_LEG poppler=ok`, PostgreSQL 98 clients / 36 requests). Final **`SMOKE_EVIDENCE` verdict pending** — run `Collect-GateA3Evidence.ps1 -Both -UpdateDocs` after deploy + minimal browser smoke. Detail: `docs/handoffs/gate-a3-full-autonomous-closure-2026-05-30.md`.
+- **Gate A3 (check/imaging leg)**: **HCC PASS**; **Auto Body supplemental dedupe fixed in v2.44.31** (local withdrawals **$41,130** vs gold **$41,404**, was **$354,909**) — production re-smoke pending. Cropper tuned (`SLAM_CROP_DPI=300`, `SLAM_CROP_MIN_HEIGHT=320`); headless smoke: `Invoke-GateA3HeadlessSmoke.ps1` then `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`. Detail: [`QMS/State-Alignment/runs/2026-05-30-gate-a3-hardening.md`](QMS/State-Alignment/runs/2026-05-30-gate-a3-hardening.md).
 - **Data layer**: Azure PostgreSQL (`USE_POSTGRES=true`); canonical schema in `db/schema.sql` and `docs/data-model.md`.
 - **Daily driver (Laura/Stef)**: Dashboard, Revenue Requests, Bank Statements, payee rules on App Service (B2). QMS visibility in sidebar + `health_check.py --qms` (O-002, v2.44.21).
 
@@ -60,7 +60,7 @@ python Scripts/health_check.py --full
 - **Azure OCR Function** (`slam-ocr-function`): parked; not the production path.
 - **CSV mode**: zero-disruption fallback when Postgres is disabled (requires server-side CSVs — not for daily driver).
 
-**Full history**: Blueprint Change Log (v2.30 → **v2.44.27**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
+**Full history**: Blueprint Change Log (v2.30 → **v2.44.28**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
 
 ---
 

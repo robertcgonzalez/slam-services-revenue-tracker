@@ -12,6 +12,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -1703,6 +1704,10 @@ def emit_gate_a3_smoke_evidence(
         "payee_rules_total": int((rules_info or {}).get("rules_total") or 0),
         "payee_merge_count": int(meta.get("azure_check_payees_merged") or 0),
         "register_is_sparse": bool(meta.get("register_is_sparse")),
+        "register_incomplete": bool(meta.get("register_incomplete")),
+        "supplemental_by_amount": int(meta.get("supplemental_by_amount") or 0),
+        "supplemental_skipped_duplicates": int(meta.get("supplemental_skipped_duplicates") or 0),
+        "payee_merge_by_amount": int(meta.get("payee_merge_by_amount") or 0),
         "imaging_active": imaging_active,
         "cropper_skipped": cropper_skipped,
         "check_engine": str(meta.get("azure_check_engine") or meta.get("check_source") or ""),
@@ -2153,60 +2158,406 @@ def _normalize_check_number(value: Any) -> str:
     return digits.lstrip("0") or digits or ""
 
 
+_AMOUNT_MATCH_TOLERANCE = 0.01
+# OCR on check crops occasionally reads routing/account numbers as amounts (Gate A3 Auto Body).
+_CHECK_AMOUNT_ABSOLUTE_CAP = 10_000.0
+
+
+def _check_number_from_register_row(row: dict[str, Any]) -> str:
+    """Check# field or digits embedded in Description (Traditions tabular leg)."""
+
+    num = _normalize_check_number(row.get("Check#"))
+    if num:
+        return num
+    desc = str(row.get("Description") or "")
+    match = re.search(r"(?i)\bcheck\s*#?\s*(\d{3,8})\b", desc)
+    if match:
+        return _normalize_check_number(match.group(1))
+    return ""
+
+
+def _is_register_debit(row: dict[str, Any]) -> bool:
+    amt = _parse_transaction_amount(row)
+    return amt is not None and amt < 0
+
+
+def _register_debit_is_eft_like(row: dict[str, Any]) -> bool:
+    """True for ACH/EFT/transfer debits that are not check-image rows."""
+
+    if not _is_register_debit(row):
+        return False
+    if _check_number_from_register_row(row):
+        return False
+    desc = str(row.get("Description") or "").lower()
+    if re.search(r"\bcheck\b", desc):
+        return False
+    return bool(re.search(r"\beft\b|\bach\b|transfer|wire|debit", desc))
+
+
+def _filter_implausible_check_txns(
+    check_txns: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop check-leg rows with absurd NumberAmount values (memo/account OCR bleed)."""
+
+    if not check_txns:
+        return [], 0
+
+    kept: list[dict[str, Any]] = []
+    rejected = 0
+    for txn in check_txns:
+        amt = _parse_transaction_amount(txn)
+        if amt is None or abs(amt) <= 0:
+            continue
+        if abs(amt) > _CHECK_AMOUNT_ABSOLUTE_CAP:
+            rejected += 1
+            continue
+        kept.append(txn)
+    return kept, rejected
+
+
+def _resolve_duplicate_check_numbers(
+    check_txns: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """When OCR returns multiple amounts for one check#, keep the most plausible row."""
+
+    import statistics
+    from collections import defaultdict
+
+    by_num: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    no_num: list[dict[str, Any]] = []
+    for txn in check_txns:
+        num = _normalize_check_number(txn.get("Check#"))
+        if num:
+            by_num[num].append(txn)
+        else:
+            no_num.append(txn)
+
+    amounts = [
+        abs(_parse_transaction_amount(t) or 0.0)
+        for t in check_txns
+        if (_parse_transaction_amount(t) or 0) != 0
+    ]
+    median = statistics.median(amounts) if amounts else 0.0
+
+    resolved: list[dict[str, Any]] = list(no_num)
+    for group in by_num.values():
+        if len(group) == 1:
+            resolved.append(group[0])
+            continue
+        resolved.append(
+            min(
+                group,
+                key=lambda t: abs(abs(_parse_transaction_amount(t) or 0.0) - median),
+            )
+        )
+    return resolved
+
+
+def _check_txn_looks_like_deposit(txn: dict[str, Any]) -> bool:
+    """Deposit slips mis-cropped as checks (Gate A3 Auto Body ``Regular Deposit`` rows)."""
+
+    text = " ".join(
+        str(txn.get(key) or "")
+        for key in ("Description", "Payee", "ReviewReason")
+    ).lower()
+    if "regular deposit" in text or "deposit slip" in text:
+        return True
+    if re.search(r"\bdeposit\b", text) and "withdrawal" not in text and "check" not in text:
+        return True
+    return False
+
+
+def _dedupe_check_txn_rows(check_txns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per (check number, amount); then one per payee+amount when number missing."""
+
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for txn in check_txns:
+        num = _normalize_check_number(txn.get("Check#"))
+        payee = str(txn.get("Payee") or txn.get("Description") or "").strip().lower()[:40]
+        amt = _parse_transaction_amount(txn)
+        amt_key = f"{abs(amt):.2f}" if amt not in (None, 0) else ""
+        key = (num, payee, amt_key)
+        if key in seen and any(key):
+            continue
+        seen.add(key)
+        out.append(txn)
+    return out
+
+
+def _parse_transaction_amount(txn: dict[str, Any]) -> float | None:
+    """Parse SignedAmount or Amount from a canonical transaction dict."""
+
+    for key in ("SignedAmount", "Amount"):
+        raw = txn.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return float(str(raw).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _amounts_match(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return False
+    return abs(abs(a) - abs(b)) <= _AMOUNT_MATCH_TOLERANCE
+
+
+def _register_is_incomplete(
+    register_txns: list[dict[str, Any]],
+    check_txns: list[dict[str, Any]],
+) -> bool:
+    """True when the register pass likely missed imaging-page check activity."""
+
+    n_reg = len(register_txns)
+    if n_reg < _REGISTER_SPARSE_THRESHOLD:
+        return True
+    n_chk = len(check_txns)
+    return n_chk > 0 and n_reg < n_chk
+
+
+def _register_row_matches_check_txn(
+    register_txn: dict[str, Any],
+    check_txn: dict[str, Any],
+) -> str | None:
+    """Return ``check_number`` or ``amount`` when register row covers the check leg row."""
+
+    reg_chk = _check_number_from_register_row(register_txn)
+    chk_num = _normalize_check_number(check_txn.get("Check#"))
+    if reg_chk and chk_num and reg_chk == chk_num:
+        return "check_number"
+    if not _is_register_debit(register_txn):
+        return None
+    if _amounts_match(
+        _parse_transaction_amount(register_txn),
+        _parse_transaction_amount(check_txn),
+    ):
+        return "amount"
+    return None
+
+
+def _filter_supplemental_check_txns(
+    register_txns: list[dict[str, Any]],
+    check_txns: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any], set[int]]:
+    """Return check-leg rows to append after deduping against the register pass.
+
+    Uses check-number matching when available, then amount matching (±$0.01) on
+    register debits only. When the register pass looks complete (e.g. HCC with
+    98 rows vs 40 checks), returns an empty supplemental list to avoid
+    double-counting withdrawals.
+
+    Returns ``(supplemental, stats, register_prune_indices)`` where prune indices
+    are register rows superseded by the imaging leg (check# or amount match).
+    """
+
+    stats: dict[str, Any] = {
+        "register_incomplete": False,
+        "register_is_sparse": len(register_txns) < _REGISTER_SPARSE_THRESHOLD,
+        "supplemental_skipped_duplicates": 0,
+        "supplemental_skipped_by_check_number": 0,
+        "supplemental_skipped_by_amount": 0,
+        "supplemental_by_amount": 0,
+        "supplemental_rejected_outliers": 0,
+        "supplemental_rejected_deposits": 0,
+        "register_rows_pruned": 0,
+        "unmatched_check_rows": len(check_txns),
+    }
+    register_prune_indices: set[int] = set()
+
+    if not check_txns:
+        return [], stats, register_prune_indices
+
+    check_txns, rejected = _filter_implausible_check_txns(check_txns)
+    stats["supplemental_rejected_outliers"] = rejected
+    deposit_like = sum(1 for t in check_txns if _check_txn_looks_like_deposit(t))
+    check_txns = [t for t in check_txns if not _check_txn_looks_like_deposit(t)]
+    stats["supplemental_rejected_deposits"] = deposit_like
+    check_txns = _resolve_duplicate_check_numbers(check_txns)
+    check_txns = _dedupe_check_txn_rows(check_txns)
+
+    if not _register_is_incomplete(register_txns, check_txns):
+        return [], stats, register_prune_indices
+
+    stats["register_incomplete"] = True
+    supplemental: list[dict[str, Any]] = []
+
+    # Multiset: each register debit amount can cover at most one check leg row.
+    debit_amounts: Counter[float] = Counter()
+    for reg_txn in register_txns:
+        if not _is_register_debit(reg_txn):
+            continue
+        amt = _parse_transaction_amount(reg_txn)
+        if amt is not None:
+            debit_amounts[round(abs(amt), 2)] += 1
+
+    for check_txn in check_txns:
+        matched_reason: str | None = None
+        matched_reg_idx: int | None = None
+        for reg_idx, reg_txn in enumerate(register_txns):
+            reason = _register_row_matches_check_txn(reg_txn, check_txn)
+            if not reason:
+                continue
+            if reason == "amount":
+                key = round(abs(_parse_transaction_amount(reg_txn) or 0.0), 2)
+                if debit_amounts.get(key, 0) <= 0:
+                    continue
+                debit_amounts[key] -= 1
+            matched_reason = reason
+            matched_reg_idx = reg_idx
+            break
+        if matched_reason:
+            stats["supplemental_skipped_duplicates"] += 1
+            if matched_reason == "check_number":
+                stats["supplemental_skipped_by_check_number"] += 1
+            else:
+                stats["supplemental_skipped_by_amount"] += 1
+            if matched_reg_idx is not None:
+                register_prune_indices.add(matched_reg_idx)
+            continue
+        supplemental.append(check_txn)
+        if not _normalize_check_number(check_txn.get("Check#")):
+            stats["supplemental_by_amount"] += 1
+
+    stats["unmatched_check_rows"] = len(supplemental)
+    stats["register_rows_pruned"] = len(register_prune_indices)
+    return supplemental, stats, register_prune_indices
+
+
+def _prune_register_for_supplemental(
+    register_txns: list[dict[str, Any]],
+    *,
+    register_incomplete: bool,
+    supplemental: list[dict[str, Any]],
+    prune_indices: set[int],
+) -> list[dict[str, Any]]:
+    """Drop register rows superseded by imaging-leg checks; keep deposits and EFT debits."""
+
+    if not register_incomplete or not supplemental:
+        return register_txns
+
+    kept: list[dict[str, Any]] = []
+    for idx, row in enumerate(register_txns):
+        if idx in prune_indices:
+            continue
+        if _is_register_debit(row) and not _register_debit_is_eft_like(row):
+            continue
+        kept.append(row)
+    return kept
+
+
 def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """Drop obvious duplicates when register rows and check-derived rows overlap."""
 
     if df is None or df.empty:
         return df
     work = df.copy()
+    amount_col = "SignedAmount" if "SignedAmount" in work.columns else "Amount"
+    if amount_col in work.columns:
+        work["_abs_amt"] = pd.to_numeric(
+            work[amount_col].astype(str).str.replace(",", "", regex=False),
+            errors="coerce",
+        ).abs()
+
     if "Check#" in work.columns:
         work["_chk"] = work["Check#"].astype(str).str.strip()
         has_chk = work["_chk"] != ""
         with_chk = work[has_chk].drop_duplicates(subset=["_chk", "SignedAmount"], keep="first")
         without_chk = work[~has_chk]
         work = pd.concat([with_chk, without_chk], ignore_index=True)
-        work = work.drop(columns=["_chk"], errors="ignore")
-    return work.reset_index(drop=True)
+
+    # Drop supplemental amount-only rows when register already has the same withdrawal.
+    if (
+        "Source" in work.columns
+        and "_abs_amt" in work.columns
+        and "Check#" in work.columns
+    ):
+        no_chk = work["Check#"].astype(str).str.strip() == ""
+        reg_amts = set(work.loc[work["Source"] == "register", "_abs_amt"].dropna())
+        drop_mask = (
+            no_chk
+            & (work["Source"] == "check_image_crop")
+            & work["_abs_amt"].isin(reg_amts)
+        )
+        work = work[~drop_mask]
+
+    return work.drop(columns=["_chk", "_abs_amt"], errors="ignore").reset_index(drop=True)
 
 
 def _merge_azure_checks_into_transactions(
     df: pd.DataFrame,
     checks: list[dict[str, Any]],
-) -> tuple[pd.DataFrame, int]:
-    """Match Azure ``prebuilt-check.us`` rows to transactions by check number."""
+) -> tuple[pd.DataFrame, int, dict[str, int]]:
+    """Match Azure ``prebuilt-check.us`` rows to transactions by check number or amount."""
+
+    merge_stats = {"merged_by_check_number": 0, "merged_by_amount": 0}
 
     if df is None or df.empty or not checks:
-        return df, 0
+        return df, 0, merge_stats
 
     by_number: dict[str, dict[str, Any]] = {}
+    checks_by_amount: list[tuple[float, dict[str, Any]]] = []
     for check in checks:
         num = str(check.get("check_number") or "").strip()
         if num:
             by_number[num] = check
+        try:
+            amt = float(check.get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        if amt:
+            checks_by_amount.append((abs(amt), check))
 
     merged = 0
     if "Check#" not in df.columns:
-        return df, 0
+        return df, 0, merge_stats
 
-    for idx, row in df.iterrows():
-        cnum = str(row.get("Check#") or "").strip()
-        if not cnum or cnum not in by_number:
-            continue
-        payee = str(by_number[cnum].get("pay_to") or "").strip()
+    used_check_ids: set[int] = set()
+
+    def _apply_payee(idx: int, check: dict[str, Any], reason: str) -> bool:
+        payee = str(check.get("pay_to") or "").strip()
         if not payee:
-            continue
-        current = str(row.get("Payee") or "").strip()
+            return False
+        current = str(df.at[idx, "Payee"] or "").strip()
         if current and current.lower() not in ("", "uncategorized"):
-            continue
+            return False
         df.at[idx, "Payee"] = payee
-        # Improve provenance when we pull data from a check image crop
         if "Source" in df.columns:
             current_source = str(df.at[idx, "Source"] or "").strip()
             if not current_source or current_source.lower() == "register":
                 df.at[idx, "Source"] = "check_image_crop"
+        nonlocal merged
         merged += 1
+        if reason == "check_number":
+            merge_stats["merged_by_check_number"] += 1
+        else:
+            merge_stats["merged_by_amount"] += 1
+        return True
 
-    return df, merged
+    for idx, row in df.iterrows():
+        cnum = str(row.get("Check#") or "").strip()
+        if cnum and cnum in by_number:
+            check = by_number[cnum]
+            check_id = id(check)
+            if check_id not in used_check_ids and _apply_payee(idx, check, "check_number"):
+                used_check_ids.add(check_id)
+            continue
+
+        row_amt = _parse_transaction_amount(row.to_dict())
+        if row_amt is None:
+            continue
+        for check_idx, (check_amt, check) in enumerate(checks_by_amount):
+            if check_idx in used_check_ids:
+                continue
+            if not _amounts_match(row_amt, check_amt):
+                continue
+            if _apply_payee(idx, check, "amount"):
+                used_check_ids.add(check_idx)
+            break
+
+    return df, merged, merge_stats
 
 
 def _run_azure_ocr_via_document_intelligence(
@@ -2402,31 +2753,34 @@ def _run_azure_ocr_via_document_intelligence(
 
         check_txns = checks_to_transaction_rows(checks)
 
-        # Smarter assembly to avoid row bloat on heavily imaged statements:
-        # 1. Enrich any matching register rows with high-quality payees from checks (existing logic).
-        # 2. Only append check-derived rows whose check number was NOT already present in the register pass.
-        #    This prevents duplicating the same checks as separate "CHECK #### Payee" rows when the
-        #    register leg captured them (or partials). On sparse-register PDFs (most activity on
-        #    imaging pages), the unmatched check rows still supply the missing transactions cleanly.
-        register_check_nums = {
-            _normalize_check_number(r.get("Check#"))
-            for r in register_txns
-            if _normalize_check_number(r.get("Check#"))
-        }
-        unmatched_check_txns = [
-            t
-            for t in check_txns
-            if _normalize_check_number(t.get("Check#")) not in register_check_nums
-        ]
-        # When the register pass is non-sparse, its withdrawal/deposit totals already
-        # reflect tabular activity. Appending check-image rows double-counts because
-        # Azure DI register output rarely populates Check# (so every check leg row
-        # looks "unmatched"). Reserve supplemental rows for sparse-register PDFs only;
-        # otherwise the imaging leg supplies payee enrichment via _merge_azure_checks.
-        register_is_sparse = len(register_txns) < _REGISTER_SPARSE_THRESHOLD
-        supplemental_check_txns = unmatched_check_txns if register_is_sparse else []
+        supplemental_check_txns, assembly_stats, register_prune_indices = _filter_supplemental_check_txns(
+            register_txns,
+            check_txns,
+        )
+        register_txns = _prune_register_for_supplemental(
+            register_txns,
+            register_incomplete=bool(assembly_stats.get("register_incomplete")),
+            supplemental=supplemental_check_txns,
+            prune_indices=register_prune_indices,
+        )
+        register_is_sparse = bool(assembly_stats.get("register_is_sparse"))
         meta["register_is_sparse"] = register_is_sparse
-        meta["unmatched_check_rows"] = len(unmatched_check_txns)
+        meta["register_incomplete"] = bool(assembly_stats.get("register_incomplete"))
+        meta["supplemental_skipped_duplicates"] = int(
+            assembly_stats.get("supplemental_skipped_duplicates") or 0
+        )
+        meta["supplemental_skipped_by_amount"] = int(
+            assembly_stats.get("supplemental_skipped_by_amount") or 0
+        )
+        meta["supplemental_skipped_by_check_number"] = int(
+            assembly_stats.get("supplemental_skipped_by_check_number") or 0
+        )
+        meta["supplemental_by_amount"] = int(assembly_stats.get("supplemental_by_amount") or 0)
+        meta["supplemental_rejected_outliers"] = int(
+            assembly_stats.get("supplemental_rejected_outliers") or 0
+        )
+        meta["register_rows_pruned"] = int(assembly_stats.get("register_rows_pruned") or 0)
+        meta["unmatched_check_rows"] = int(assembly_stats.get("unmatched_check_rows") or 0)
 
         # Add clear provenance so the final CSV shows register vs check-image origin
         for row in register_txns:
@@ -2496,18 +2850,27 @@ def _run_azure_ocr_via_document_intelligence(
         meta["supplemental_check_rows"] = len(supplemental_check_txns)
         meta["pages_analyzed"] = pages_str or check_pages
         merged = 0
+        merge_stats: dict[str, int] = {}
         if checks:
-            df, merged = _merge_azure_checks_into_transactions(df, checks)
+            df, merged, merge_stats = _merge_azure_checks_into_transactions(df, checks)
             meta["azure_check_payees_merged"] = merged
-        if register_is_sparse:
+            meta["payee_merge_by_check_number"] = merge_stats.get("merged_by_check_number", 0)
+            meta["payee_merge_by_amount"] = merge_stats.get("merged_by_amount", 0)
+        if assembly_stats.get("register_incomplete"):
             assembly_note = (
                 f"{len(supplemental_check_txns)} supplemental from checks "
-                f"(of {len(check_txns)} raw, {len(unmatched_check_txns)} unmatched)"
+                f"({assembly_stats.get('supplemental_skipped_duplicates', 0)} deduped by register; "
+                f"{assembly_stats.get('supplemental_by_amount', 0)} without check#)"
+            )
+        elif register_is_sparse:
+            assembly_note = (
+                f"{len(supplemental_check_txns)} supplemental from checks "
+                f"(sparse register; {meta['unmatched_check_rows']} unmatched)"
             )
         else:
             assembly_note = (
-                f"0 supplemental rows appended (register pass authoritative; "
-                f"{len(unmatched_check_txns)} unmatched check leg row(s) used for payee merge only)"
+                "0 supplemental rows appended (register pass authoritative; "
+                f"{len(check_txns)} check leg row(s) used for payee merge only)"
             )
         logs.append(
             _log(
@@ -2533,9 +2896,9 @@ def _run_azure_ocr_via_document_intelligence(
         logs.append(
             _log(
                 "info",
-                f"Architecture: Register leg via prebuilt bank statement model | "
-                f"Imaging leg via geometric crops + per-crop Document Intelligence `prebuilt-check.us`. "
-                f"Deposit slips cropped + saved for future processing.",
+                "Architecture: Register leg via prebuilt bank statement model | "
+                "Imaging leg via geometric crops + per-crop Document Intelligence `prebuilt-check.us`. "
+                "Deposit slips cropped + saved for future processing.",
             )
         )
 
