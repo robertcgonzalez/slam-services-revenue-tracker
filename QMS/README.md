@@ -53,7 +53,7 @@
 | Management Reviews | Robert | `QMS/Management-Reviews/` | Per defined cadence |
 | Risk Register | Robert | `QMS/Risk-Register.md` | New risk identified or status change |
 | State Alignment runs | Robert + agents | `QMS/State-Alignment/runs/` | After major work or per iteration |
-| Blueprint (Section 15 + Change Log) | Robert + agents | Root | After any material QMS action |
+| Blueprint (Change Log hub + QMS pointer) | Robert + agents | Root | After any material QMS action |
 | Section 14 (triage & plan) | Robert | Blueprint | Weekly / per iteration |
 
 ---
@@ -67,9 +67,9 @@
 
 ---
 
-## Current Baseline Status (as of v2.44.9)
+## Current Baseline Status (as of v2.44.24)
 
-- **Baseline version**: 2.44.8 (Section 15 of Blueprint)
+- **Baseline hub**: Blueprint status line + Change Log (v2.44.10 hub evolution); operational detail in this `QMS/` folder — not a recreated Blueprint Section 15 body
 - **Operational home**: This `QMS/` folder (activated v2.44.9)
 - **Last Management Review**: See most recent file in `Management-Reviews/`
 - **Open feedback items**: Check `Data/feedback_log.csv`

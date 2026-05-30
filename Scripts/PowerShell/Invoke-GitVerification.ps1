@@ -48,7 +48,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$scriptVersion = "1.0.0"  # 2026-06 alignment to Prime Directive + canonical ritual
+$scriptVersion = "1.0.1"  # 2026-05-30: safelist docs/security/*.md setup guides (not secret stores)
+
+function Test-IsSecuritySetupGuideDoc {
+    param([string]$Path)
+    # Committed markdown setup guides under docs/security/ are documentation, not credential files.
+    return $Path -match '^docs/security/.+\.md$'
+}
 
 function Write-Section($title) {
     if (-not $Quiet) {
@@ -89,6 +95,7 @@ $sensitivePatterns = @(
 )
 
 foreach ($file in $staged) {
+    if (Test-IsSecuritySetupGuideDoc $file) { continue }
     foreach ($pat in $sensitivePatterns) {
         if ($file -match $pat) {
             $issues += "STAGED SENSITIVE: $file (matched $pat)"
@@ -106,6 +113,7 @@ Write-Section "UNTRACKED / IGNORED SENSITIVE CHECK (git ls-files --others --excl
 $untrackedRaw = git ls-files --others --exclude-standard 2>$null
 $untracked = @($untrackedRaw | Where-Object { $_ -and $_.Trim() })
 foreach ($file in $untracked) {
+    if (Test-IsSecuritySetupGuideDoc $file) { continue }
     foreach ($pat in $sensitivePatterns) {
         if ($file -match $pat) {
             $issues += "UNTRACKED SENSITIVE (would be addable): $file (matched $pat)"
