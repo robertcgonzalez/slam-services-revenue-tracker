@@ -26,8 +26,14 @@
 
 ## Residual debt
 
-Spike Codespaces banner pass (M14) — optional; legacy `Scripts/smart_check_cropper_final_dynamic.py` retained for Azure Function port reference only.
+Spike Codespaces banner pass (M14) — **closed 2026-05-30** (historical banners on PHASE0/1, POST_SPIKE, G2; `Scripts/spike/README.md` canonical index). Legacy `Scripts/smart_check_cropper_final_dynamic.py` retained for Azure Function port reference only.
+
+## Hygiene session (2026-05-30)
+
+- **Spike indexing:** Expanded `Scripts/spike/README.md`; committed tier-1 spike sources + docs; gitignored `Sprint_*_Prompt.md`; removed `Scripts/temp_analyze_auto_body.py`.
+- **Drift audit plan:** All phases + memorialization marked complete in `.cursor/plans/codebase_drift_audit_96b59c1a.plan.md`.
+- **Blueprint:** v2.44.27 Change Log entry (spike hygiene — single place for narrative).
 
 ## Verification
 
-Memorialization closed per `docs/memorialization-discipline.md`: Blueprint v2.44.26 Change Log + this run file. `Invoke-GitVerification.ps1` CLEAN in Phase 4 implementer session.
+Memorialization closed per `docs/memorialization-discipline.md`: Blueprint v2.44.26–27 Change Log + this run file. `Invoke-GitVerification.ps1` run at hygiene session close.

@@ -147,8 +147,8 @@ Export-KiloCode-Output
 .kilocode
 docs-backups/
 
-# ==================== G1 Spike & Heavy Diagnostic Output (2026-05-27) ====================
-# Per owner decision: only selected high-value parts of the G1 spike will be committed later.
+# ==================== G1 Spike artifacts (heavy output — never commit) ====================
+# Tier-1 spike sources + docs are committed under Scripts/spike/ (see Scripts/spike/README.md).
 # Heavy output (images, JSON diagnostics, large run artifacts) must never enter the repo.
 Scripts/spike/artifacts/
 Scripts/spike/**/artifacts/
@@ -170,8 +170,9 @@ v2.37-final-review.txt
 test_fast_vs_strict.py
 Scripts/temp_*.py
 
-# G1 spike: ephemeral Cursor session prompts (canonical narrative: repo-root Spike-Report + tier-1 spike docs)
+# G1 spike: ephemeral session prompts (canonical narrative: repo-root Spike-Report + Scripts/spike/README.md)
 Scripts/spike/CURSOR_PROMPT_*.md
+Scripts/spike/Sprint_*_Prompt.md
 *_review.txt
 *review-v*.txt
 

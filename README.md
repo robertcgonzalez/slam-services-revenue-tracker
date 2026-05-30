@@ -53,14 +53,14 @@ python Scripts/health_check.py --full
 ### Local Enhanced (Robert's Windows machine only)
 
 - **Heavy OCR + hybrid CV**: `App/local_enhanced_ocr.py` — full intelligent check-linking pipeline, Azure CV Read on check crops when `AZURE_CV_*` or `SLAM_CV_CACHE_DIR` in `.env`. Install via `Setup-LocalVenv.ps1 -InstallHeavyOcr` / `Install-LocalHeavyOcr.ps1`. **Not wired into production Streamlit UI.**
-- **G1 spike artifacts**: Phases 0–7 complete under `Scripts/spike/` (CV round-trip v2.44.13 documented in Blueprint Change Log; no `Documents/` folder in repo).
+- **G1 spike artifacts**: Phases 0–7 complete — canonical index [`Scripts/spike/README.md`](Scripts/spike/README.md) (v2.44.27).
 
 ### Parked / fallback
 
 - **Azure OCR Function** (`slam-ocr-function`): parked; not the production path.
 - **CSV mode**: zero-disruption fallback when Postgres is disabled (requires server-side CSVs — not for daily driver).
 
-**Full history**: Blueprint Change Log (v2.30 → **v2.44.25**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
+**Full history**: Blueprint Change Log (v2.30 → **v2.44.27**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
 
 ---
 
