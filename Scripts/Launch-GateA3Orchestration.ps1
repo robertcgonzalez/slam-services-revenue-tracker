@@ -107,7 +107,7 @@ Write-Host "2. Feed it (or the directive) to Cursor with maximum autonomy instru
 Write-Host "3. Cursor will update the runbook + produce/refine Gate A3 artifacts."
 Write-Host ""
 Write-Host "Reminder (hard limit): Cursor must NEVER perform the live browser re-smoke with real PDFs."
-Write-Host "All git operations must follow the full verification sequence per .cursor/rules/slam-services.mdc."
+Write-Host "All git operations must use the canonical verifier: .\Scripts\PowerShell\Invoke-GitVerification.ps1 (Prime Directive aligned, single source per contracts)."
 Write-Host ""
 
 if (Test-Path $outputFile) {

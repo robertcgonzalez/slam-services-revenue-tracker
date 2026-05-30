@@ -20,21 +20,17 @@
 - Never duplicate content across documents (see Documentation Roles Matrix in `README.md`).
 
 ### 3. Full git verification sequence
-Run and log the complete output:
+Execute the canonical implementation (single source of truth):
 
 ```powershell
-git status
-git diff --cached --stat
-git check-ignore -v . 2>$null | Select-String -Pattern "(Data/|\.csv|\.env|secrets|logs|\.zip)" | Select-Object -First 20
-git ls-files --others --exclude-standard | Select-String -Pattern "(\.env|Data/.*\.csv|.*\.zip|deploy-logs)"
-Write-Output "=== VERIFICATION SUMMARY ==="
+.\Scripts\PowerShell\Invoke-GitVerification.ps1
 ```
 
-Confirm: no client CSVs, secrets, `.env`, logs, or deploy artifacts staged.
+Capture its complete output. It exits 0 only when clean (no sensitive paths staged or in high-risk untracked state). This script is the enforceable form of the verification ritual required by the agent contracts and the dual-agent Prime Directive.
 
-### 4. Commit + push when clean
-- If verification passes → `git add` (relevant files only), commit with a clear message, push to `origin main`.
-- If verification flags issues or sensitive paths → **stop**. Document the blocker in the session artifact; do **not** commit.
+### 4. Commit + push when clean (Prime Directive aligned)
+- If `Invoke-GitVerification.ps1` exits 0 (CLEAN) → `git add` (relevant files only), commit with a clear message, and `git push origin main`. The dual-agent Prime Directive requires agents to perform this themselves with no handoff to a human.
+- If the script reports issues → **stop immediately**. Document the blocker. Do **not** commit. Re-run the script after remediation until it exits 0.
 
 ---
 
@@ -48,4 +44,4 @@ Confirm: no client CSVs, secrets, `.env`, logs, or deploy artifacts staged.
 | New or changed risk | `QMS/Risk-Register.md` |
 | Agent handoff / phased work | `docs/handoffs/` + dual-agent session |
 
-*Agents: this checklist is mandatory language in `.cursor/rules/slam-services.mdc` and `.grok/AGENT.md`.*
+*Agents: this checklist (and the canonical `Invoke-GitVerification.ps1`) is mandatory language in `.cursor/rules/slam-services.mdc` and `.grok/AGENT.md`. Inside dual-agent runs the orchestrator Prime Directive is the highest law and requires full autonomous execution through verified push.*

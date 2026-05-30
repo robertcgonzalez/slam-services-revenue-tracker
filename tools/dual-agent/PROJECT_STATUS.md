@@ -1,7 +1,14 @@
 # Dual-Agent — Project Status, Roadmap & Recommendations
 
 **Date**: 2026-05 (Current)
-**Status**: Phase 1 + Phase 2 + Hardening Complete (Single source of truth + robust Cursor handoff + live doctor validation)
+**Status**: Prime Directive Update — Full autonomous end-to-end iteration is now the enforced procedure (overrides all phased/human-review patterns). Core prompts + docs updated so agents continue until the complete task goal with no intermediate human summaries.
+
+**Prime Directive (runtime-enforced)**: The loop iterates for every possible agent-executable step (code, CLI with full auth, tests, deploys, verification) until 100% of the user's original task is done. Only `TASK COMPLETE` ends it.
+
+**SLAM alignment (June 2026)**: The project's canonical `Invoke-GitVerification.ps1` + updated thin contracts now make the "full autonomous verification → commit → push to main" path executable and consistent with the Prime Directive inside dual-agent runs on this repo. The verification script is the single-source hygienic gate.
+
+**Date of last structural change**: 2026-06 (this update)
+**Prior Status**: Phase 1 + Phase 2 + Hardening Complete (Single source of truth + robust Cursor handoff + live doctor validation)
 **Owner**: Built for SLAM Services project by Grok (xAI) in collaboration with user
 
 ---

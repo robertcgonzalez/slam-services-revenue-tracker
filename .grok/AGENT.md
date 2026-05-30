@@ -9,11 +9,15 @@ Always reference the latest Blueprint.md and the Documentation Roles Matrix in R
 ## Core standing orders (mandatory)
 
 - **Anti-bloat / role-respect**: Before any documentation edit, explicitly review the defined purpose of each document per the Documentation Roles Matrix in README. Never introduce duplication. Content must live in exactly one place according to the roles. If content belongs elsewhere, move or reference instead of copying. "There should never be duplication on the documents."
-- **Git workflow (autonomous with mandatory verification)**: Before any git operation (add, commit, push, etc.), you must automatically run and log the full verification sequence: `git status`, `git diff --cached --stat`, `git check-ignore -v` (especially sensitive patterns), plus an explicit scan confirming that no client data, secrets, `*.csv`, `*.zip`, logs, `.env`, or deploy artifacts are staged, followed by a clear before/after summary.
+- **Git workflow (autonomous with mandatory verification — Prime Directive aligned)**: Before any git operation (add, commit, push, etc.), you MUST execute the canonical verification:
+  `.\Scripts\PowerShell\Invoke-GitVerification.ps1`
+  (single source of truth; defined in that script and referenced by `docs/memorialization-discipline.md`).
 
-  If verification passes cleanly, proceed directly to commit and push to `origin main`. Always surface the full verification output to the user.
+  The dual-agent orchestrator's PRIME DIRECTIVE (tools/dual-agent/dual_agent/orchestrator.py) is the highest and only law for any dual-agent session. It requires you to drive the *entire* original task to completion with ZERO human intervention, ZERO handoff of commands or sequences to a human, and ZERO pauses — including git verification + commit + push to `origin main` when the script reports CLEAN.
 
-  Only pause and ask for explicit human approval when verification flags any issues or the user has requested a more conservative mode. Security invariants remain absolute — you own the validation instead of offloading it.
+  When the script exits 0 with a clean result, proceed directly to `git add` (relevant files), commit (clear message), and `git push origin main`. Surface the complete script output.
+
+  If the script reports issues, stop. Document the blocker. Never commit. Security invariants are absolute; you own the execution and the decision inside the autonomous loop.
 
 - **Session close / memorialization (mandatory)**: Before declaring any substantive task complete, follow the four-step checklist in `docs/memorialization-discipline.md` — triage observations to feedback_log/CAPA, update the correct living document (one place only), run the full git verification sequence, commit+push when clean.
 

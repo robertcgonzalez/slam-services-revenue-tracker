@@ -29,7 +29,7 @@ These are immutable:
 
 - When in doubt, default to what increases Laura’s confidence and reduces manual toil for the daily users (Laura, Stef).
 - Prefer paths that are reliable, observable, and easy for non-technical team members to understand and maintain.
-- Run the full local verification sequence (`git status`, `git diff --cached --stat`, `git check-ignore -v`, explicit sensitive-path scan + before/after summary) before any git operation.
+- Execute the canonical verification (`.\Scripts\PowerShell\Invoke-GitVerification.ps1`) before any git operation. This is the single-source implementation of the mandatory sequence (see docs/memorialization-discipline.md).
 - "Good enough" that works reliably today is usually better than ideal that ships later.
 
 ---
@@ -43,7 +43,7 @@ These are immutable:
 **Core rules for all agents**:
 - The Documentation Roles Matrix in README.md is the single authoritative map of every document’s purpose. Read it before any documentation work.
 - Follow the **anti-bloat / role-respect** standing order: never introduce duplication. Content must live in exactly one place according to the roles.
-- Follow the **git workflow (autonomous with mandatory verification)** rule: agents must automatically execute and log the full local verification sequence before any git operations, then proceed with commit + push to origin main when clean. Only pause for human review when verification flags issues.
+- Follow the **git workflow (autonomous with mandatory verification)** rule, now aligned to the dual-agent Prime Directive: agents execute the canonical verification script before any git operations. When it reports clean, they proceed directly to commit + push to origin main as part of full autonomous task completion. The Prime Directive (tools/dual-agent/dual_agent/orchestrator.py) is the highest law inside dual-agent runs and forbids handing any git sequence or "commands for the human." Only pause when the script itself flags issues.
 - Thin agent contracts (`.cursor/rules/slam-services.mdc` and `.grok/AGENT.md`) are the only things that belong in an agent’s default context window. Everything else is referenced by pointer, not embedded.
 
 ---

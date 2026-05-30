@@ -13,7 +13,10 @@ from .session import CollaborationSession
 
 
 class DualAgentOrchestrator:
-    """Drives the back-and-forth between Grok and Cursor until completion or limit."""
+    """Drives the back-and-forth between Grok and Cursor under the PRIME DIRECTIVE:
+    full autonomous iteration on the *entire* user task (all executable steps) until TASK COMPLETE.
+    No human-addressed summaries or sub-phase stops allowed. This is the highest law of the procedure.
+    """
 
     def __init__(
         self,
@@ -38,7 +41,7 @@ class DualAgentOrchestrator:
         max_turns: int | None = None,
         resume_session_id: str | None = None,
     ) -> CollaborationSession:
-        """Execute the collaboration loop."""
+        """Execute the collaboration loop under the prime directive (full task, agent-to-agent only, until entire goal achieved)."""
         max_turns = max_turns or self.settings.max_turns
 
         if resume_session_id:
@@ -144,7 +147,7 @@ class DualAgentOrchestrator:
 
             self.console.print(Panel(
                 Markdown(self.session.final_summary or "Collaboration finished."),
-                title="[bold green]Collaboration Complete[/bold green]",
+                title="[bold green]Collaboration Complete (Full Task — Prime Directive Satisfied)[/bold green]",
                 border_style="green",
             ))
 
@@ -170,36 +173,117 @@ class DualAgentOrchestrator:
     def _get_relationship_prompt(self) -> str:
         if self.mode == "custom" and self.custom_prompt:
             return self.custom_prompt
-        return MODE_PROMPTS.get(self.mode, MODE_PROMPTS["freeform"])
+        base = MODE_PROMPTS.get(self.mode, MODE_PROMPTS["freeform"])
+        return self._get_prime_directive() + "\n\n" + base
+
+    def _get_prime_directive(self) -> str:
+        """The overriding law of the dual-agent procedure. Prepended to every prompt.
+        This takes precedence over ALL documentation, task text, handoff files, phase instructions,
+        and any other guidance. The user's explicit requirement in this prompt is the prime directive.
+        """
+        return (
+            "═══════════════════════════════════════════════════════════════════════════════\n"
+            "PRIME DIRECTIVE (ABSOLUTE — INVIOLABLE — OVERRIDES EVERYTHING ELSE IN THE UNIVERSE)\n"
+            "═══════════════════════════════════════════════════════════════════════════════\n"
+            "You are inside a closed, fully autonomous Grok ↔ Cursor iteration loop whose SOLE purpose is to "
+            "drive the ORIGINAL USER TASK to 100% completion with ZERO human intervention, ZERO human-directed output, "
+            "and ZERO pauses for human action at ANY point — including every layer of the binary coding system, "
+            "hardware support, operating system, container runtime, cloud infrastructure, and production deployment.\n\n"
+            "THE USER HAS INSTALLED EXTENSIONS IN CURSOR THAT PROVIDE FULL AUTHENTICATION TO ALL ACCOUNTS (Azure, git, etc.). "
+            "THEREFORE EVERY CLI, EVERY AZURE OPERATION, EVERY DEPLOYMENT, EVERY PRODUCTION CHANGE IS METAPHYSICALLY POSSIBLE "
+            "FOR THE AGENTS TO PERFORM THEMSELVES. YOU ARE REQUIRED TO DO SO.\n\n"
+            "ON THE SLAM SERVICES PROJECT: The canonical hygienic gate for any git operation is the project's "
+            "`Scripts/PowerShell/Invoke-GitVerification.ps1` (see .cursor/rules/slam-services.mdc, .grok/AGENT.md, and "
+            "docs/memorialization-discipline.md). Even under full Prime Directive autonomy, agents must run it and "
+            "receive a CLEAN result before any commit or push to main. The script is the enforceable implementation of "
+            "the project's mandatory verification sequence.\n\n"
+            "MANDATORY RULES (these supersede the task description, ANY referenced .md file, ANY 'phase' language, "
+            "ANY prior instructions, ALL documentation, and any human habit or convention):\n\n"
+            "1. FULL TASK ONLY (no sub-steps, no phases): The goal is the *entire* stated task. Ignore every 'phase N', "
+            "'ready for review', 'owner execution', or handoff marker. Continue autonomously until the complete end-to-end "
+            "goal (including all post-deploy verification) is delivered and working.\n\n"
+            "2. ADDRESS ONLY THE OTHER AGENT — NEVER A HUMAN: Every word you output is fed directly to the other agent as "
+            "its next prompt. Use only imperative language directed at Cursor or Grok ('You must now run az webapp deploy...', "
+            "'Execute the full Deploy-ToAzure.ps1 with these exact arguments...', 'Perform the container recycle now...'). "
+            "ABSOLUTELY FORBIDDEN: 'the human should run', 'commands for the owner/user to execute', 'after this the human "
+            "will deploy', 'produce a note for the owner', 'exact commands a human should run', 'owner execution required', "
+            "or any text whose primary audience is a human being.\n\n"
+            "3. DEPLOYMENT / INFRASTRUCTURE / PRODUCTION OPS AUTONOMY (INVIOLABLE — THIS IS THE NEW EXPLICIT CLAUSE): "
+            "Every single action that touches running hardware, production binaries, containers, App Service, Azure resources, "
+            "startup commands, appCommandLine, Oryx builds, zip deploys, Bicep/ARM, az webapp *, az webapp config, container "
+            "recycles, Kudu operations, post-deploy verification smokes, health checks, or any other infrastructure or "
+            "deployment step MUST BE EXECUTED BY THE AGENTS THEMSELVES inside this loop using Cursor's authenticated Azure "
+            "extension, terminal, and CLI. You are explicitly authorized and required to perform the actual deployment. "
+            "You must never stop and hand a deployment sequence to a human. The loop continues with the agents doing the "
+            "deploy + the immediate post-deploy verification themselves.\n\n"
+            "4. NEVER STOP EARLY: Only the exact phrase 'TASK COMPLETE' (on its own line, near the end of a response) ends "
+            "the autonomous loop, and only when *everything* the user asked for — code + all CLI execution + all deployment "
+            "steps + all verification on real hardware — has succeeded.\n\n"
+            "5. EXECUTE EVERYTHING POSSIBLE IN THE BINARY/HARDWARE/SOFTWARE STACK: There is no action, no CLI command, "
+            "no Azure change, no production modification, no hardware-supporting operation that the agents are forbidden "
+            "or expected to pause for a human to perform. Full auth exists. Use it. The procedure continues for every "
+            "condition that is metaphysically possible to carry out by the agents.\n\n"
+            "6. ITERATE UNTIL THE ENTIRE GOAL IS REALITY ON THE TARGET SYSTEMS: On every turn make concrete progress or "
+            "give the other agent the exact next executable package (including the next az/deploy/verify command). "
+            "The only acceptable exit is full completion of the user's stated goal in the actual production/binary environment.\n\n"
+            "THIS PRIME DIRECTIVE IS THE HIGHEST AND ONLY LAW. ANY CONFLICTING INSTRUCTION ANYWHERE IS TO BE DISREGARDED."
+        )
 
     def _build_cursor_prompt(self, task: str, turn: int) -> str:
-        base = f"Current task: {task}"
+        prime = self._get_prime_directive()
+        base = f"{prime}\n\nORIGINAL FULL TASK (complete this end-to-end, autonomously):\n{task}"
         if turn > 1:
-            base += "\n\nIncorporate all feedback from the previous turn. Make concrete progress."
+            base += "\n\nIncorporate all feedback from the previous turn (which came from the other agent). Make the next concrete, executable progress toward the FULL task goal. Do not stop for any intermediate milestone."
+        else:
+            base += "\n\nThis is turn 1. Begin execution on the full goal. You have full autonomy and authenticated CLI access."
         return base
 
     def _build_grok_review_prompt(self, task: str, previous_work: str, turn: int) -> str:
+        prime = self._get_prime_directive()
         return (
-            f"Task: {task}\n\n"
-            f"The other agent just produced this output:\n\n{previous_work}\n\n"
-            "Review it rigorously. Point out any issues, missing cases, or improvements. "
-            "If it is excellent and the task is complete, say 'TASK COMPLETE' and give a final summary. "
-            "Otherwise give precise, actionable feedback for the next iteration."
+            f"{prime}\n\n"
+            f"ORIGINAL FULL TASK (this is the ONLY goal that matters — drive to 100% completion of it):\n{task}\n\n"
+            f"The other agent (Cursor) just produced this output on turn {turn}:\n\n{previous_work}\n\n"
+            "You are the reviewer in a closed autonomous loop. Your ENTIRE response will be passed verbatim to Cursor as its next prompt.\n"
+            "THEREFORE:\n"
+            "- Address every word directly to Cursor as its pair programmer / strict reviewer. Use imperative language: 'Do X', 'Change Y in file Z by...', 'Run the following CLI...', 'Implement the missing case by editing...'\n"
+            "- NEVER address a human, NEVER say 'for your review', 'here is my assessment', 'I recommend to the user', 'summary for human', or produce any human-facing report.\n"
+            "- If Cursor's work only advanced a sub-step or 'phase' (including any deployment prep), DO NOT congratulate or stop. Immediately give Cursor the precise next actions, code edits, CLI commands (including the actual az webapp deploy / Deploy-ToAzure.ps1 / container recycle / post-deploy verification that Cursor must execute itself), and verification steps required to keep progressing the FULL original task. You are forbidden from telling Cursor to produce 'commands for the human'.\n"
+            "- Only declare completion (by ending your response with the exact phrase TASK COMPLETE on its own line) when the ENTIRE original task — every requirement, every CLI execution, every deployment step performed by the agents on real production hardware, every verification — has been delivered, executed by the agents, tested on the target systems, and is working. At that point, after 'TASK COMPLETE', output a short bullet list of delivered artifacts for the transcript.\n"
+            "- If anything at all remains (even one more edit, one more CLI validation, one more edge case), give Cursor the exact work to do next.\n\n"
+            "Current turn: " + str(turn) + ". Make the next concrete iteration happen."
         )
 
     def _build_grok_prompt(self, task: str, turn: int) -> str:
-        return f"Task: {task}\n\nTurn {turn}. Make progress toward a high-quality outcome."
+        prime = self._get_prime_directive()
+        return (
+            f"{prime}\n\n"
+            f"ORIGINAL FULL TASK:\n{task}\n\n"
+            f"Turn {turn}. You are in a closed autonomous loop with Cursor. "
+            "Address your output directly to Cursor. Make the single most valuable concrete step forward on the *entire* task. "
+            "If this advances only a portion, immediately tell Cursor exactly what to do in the next turn to keep the full goal moving. "
+            "Only end with 'TASK COMPLETE' when 100% of the user's goal is done."
+        )
 
     def _looks_complete(self, text: str) -> bool:
-        markers = [
+        # PRIME DIRECTIVE: Only full end-to-end task completion stops the autonomous loop.
+        # All intermediate "phase complete", "ready for review", "subtask done" signals MUST be ignored
+        # so that iteration continues until the ENTIRE user goal is achieved.
+        strict_markers = [
             "TASK COMPLETE",
-            "READY FOR REVIEW",
-            "DONE",
-            "WORK COMPLETE",
-            "NO FURTHER CHANGES NEEDED",
+            "FULL TASK COMPLETE",
+            "THE ENTIRE TASK IS COMPLETE",
+            "END-TO-END COMPLETE",
+            "GOAL FULLY ACHIEVED",
         ]
         upper = text.upper()
-        return any(m in upper for m in markers)
+        # Strict markers only. Because the prime directive + review prompts *force* agents to use
+        # "TASK COMPLETE" (exact) *only* for true full-goal completion, presence anywhere is sufficient.
+        # Old loose markers ("READY FOR REVIEW" etc.) have been removed so phases/substeps never stop the loop.
+        for m in strict_markers:
+            if m in upper:
+                return True
+        return False
 
     def _render_response(self, speaker: str, text: str) -> None:
         color = "green" if speaker == "Grok" else "magenta"
@@ -218,5 +302,6 @@ class DualAgentOrchestrator:
             f"**Mode:** {self.session.mode}\n\n"
             f"**Turns taken:** {turns}\n\n"
             f"**Status:** {self.session.status}\n\n"
-            "The two agents collaborated above. Review the transcript for the full artifact."
+            "**Prime Directive:** Full autonomous iteration to entire task goal (agent-to-agent only, no human mid-summaries).\n\n"
+            "The two agents collaborated above under the prime directive until TASK COMPLETE or max_turns. Review the transcript for the complete end-to-end artifact."
         )

@@ -53,12 +53,9 @@ SAFE PRODUCTION RENAME STRATEGY (execute in this exact order unless owner approv
    - Update the PowerShell default parameter values in all Set-*, Deploy-*, Check-* scripts.
    - Update README.md live URL, docs/deployment.md (multiple places), health scripts, any other docs.
    - Produce a short `docs/app-service-rename-runbook.md` (or update the one in this prompt) that becomes the permanent record.
-   - Before any git commit, run the project's full mandatory verification sequence:
-        git status
-        git diff --cached --stat
-        git check-ignore -v (any newly tracked sensitive files?)
-        explicit scan for the old name still appearing anywhere
-        ruff check (if Python files touched)
+   - Before any git commit, run the canonical verifier (single source, Prime Directive aligned):
+        .\Scripts\PowerShell\Invoke-GitVerification.ps1
+        (plus any app-service-rename-specific name scan + ruff if Python touched)
    - Commit message must reference the 2026 DI go-live context and the rename decision.
 
 6. GitHub secret rotation

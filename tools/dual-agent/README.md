@@ -81,7 +81,7 @@ You can also pass `--mode custom` and provide a system prompt that defines the r
 │       - Cursor (via official cursor-sdk)
 │  3. Alternates turns with full context handoff
 │  4. Streams both sides live
-│  5. Stops on "done", max turns, or manual cancel
+│  5. Continues autonomous iteration (full task goal only) until TASK COMPLETE or max_turns
 └─────────────────────────────┘
 ```
 
@@ -131,6 +131,12 @@ dual-agent run "..." --export transcript.md
 - The tool respects your existing `.cursor/rules` and Grok project rules when the agents run.
 - Cursor SDK runs inherit the permissions of the API key you provide.
 
+### SLAM Services specific (this repo)
+When running dual-agent here, the project's mandatory git hygiene still applies inside the autonomous loop:
+- Before any commit/push, agents **must** run `.\Scripts\PowerShell\Invoke-GitVerification.ps1` and receive a clean result.
+- The Prime Directive (enforced by this orchestrator) + the SLAM contracts then require the agents to complete the commit + `git push origin main` themselves when clean.
+- This is the aligned reality: full autonomous execution through verified push. Reversion to more conservative gates remains possible later via explicit Constitution change.
+
 ## Development & Keeping Global Install Fresh (Important)
 
 **`tools/dual-agent/` in this repo is the single source of truth.**
@@ -170,19 +176,23 @@ ruff format .
 - [ ] MCP server so either agent can call the orchestrator as a tool
 - [x] Phased production recovery pattern (used successfully for Azure App Service startup command issues in 2026)
 
-## SLAM Services Production Pattern (Phased Handoffs)
+## Prime Directive of the Dual-Agent Procedure (Highest Priority)
 
-For complex operational fixes (e.g. Azure startup errors, deployment hardening), the project uses **small focused directives** run through the orchestrator:
+**The orchestrator's overriding rule (enforced in code via prompts sent to both agents):**
 
-1. Create a minimal Phase N directive in `docs/handoffs/` (one clear goal per phase).
-2. Launch via the convenient wrapper from repo root:
-   ```powershell
-   .\Scripts\PowerShell\Invoke-DualAgentHandoff.ps1 -Directive "docs/handoffs/azure-startup-fix-phase1-clear-command.md" -MaxTurns 4
-   ```
-3. Cursor implements, signals "**PHASE N COMPLETE — ready for Grok review**".
-4. Review, then chain the next phase.
+The procedure MUST continue autonomous iteration between Grok and Cursor **until the ENTIRE stated user task/goal is 100% complete** — including every code change, every CLI execution (full auth available via Cursor's installed extensions), every test, verification, and operational outcome — with **zero human intervention or human-addressed summaries at any intermediate step**.
 
-This approach keeps context small, Grok review turns fast, and each phase independently verifiable.
+- All agent output is addressed exclusively to the *other agent* for direct continuation.
+- "Phase complete", "ready for review", "owner execution", "commands for the human to run", or any sub-step/deployment handoff signals are ignored; the loop drives through the full goal.
+- **Explicit Deployment / Ops / Hardware Autonomy (new inviolable clause):** The agents themselves must execute every az command, every Deploy-ToAzure.ps1 invocation, every container/App Service change, every production deployment, and all post-deploy verification on real hardware using Cursor's full authenticated extensions. Never produce instructions for a human to perform deployment steps.
+- Only the exact phrase `TASK COMPLETE` (near end of a response) ends the run, and only when the full original task (including all binary/hardware/infrastructure/deployment steps executed by the agents) is delivered and working on the target systems.
+- This prime directive overrides all documentation, handoff files, task text, and prior patterns.
+
+Use high `--max-turns` (12–30+) or rely on natural `TASK COMPLETE` for ambitious end-to-end work. The old small-phase + human review between phases pattern is deprecated in favor of full autonomous runs.
+
+## Legacy: Phased Handoffs (Deprecated)
+
+Older usage created small focused `docs/handoffs/` directives and chained them manually with human review between phases. This is no longer the recommended approach. The prime directive above takes precedence; any such language in existing handoff files is overridden by the orchestrator's prompts so the agents continue autonomously to the full goal.
 
 The wrapper (`Invoke-DualAgentHandoff.ps1`) ensures the hardened Python 3.10 venv + bridge shims are always used.
 
