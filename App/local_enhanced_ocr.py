@@ -40,6 +40,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from app_logging import format_pipeline_log as _log
+
 LOCAL_ENHANCED_OCR_VERSION = "v2.44.3"
 
 
@@ -84,12 +86,6 @@ _EASYOCR_READER: Any = None
 # ---------------------------------------------------------------------------
 # Logging + capability detection
 # ---------------------------------------------------------------------------
-
-
-def _log(level: str, message: str) -> str:
-    """Format a structured log line matching the Streamlit Processing log style."""
-
-    return f"[{level.upper()}] {message}"
 
 
 def environment_summary() -> dict[str, Any]:

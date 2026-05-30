@@ -19,6 +19,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from app_logging import format_pipeline_log as _log
+
 _DEFAULT_DPI = int(os.environ.get("SLAM_CROP_DPI", "400"))
 _DPI_SCALE = _DEFAULT_DPI / 300.0   # Base tuning was done around 300 DPI
 
@@ -48,10 +50,6 @@ class _Candidate:
     area: int
     var_brightness: float
     hash: str = ""
-
-
-def _log(level: str, message: str) -> str:
-    return f"[{level.upper()}] {message}"
 
 
 def _enhanced_hash(crop_rgb: Any, size: int = _HASH_SIZE) -> str:

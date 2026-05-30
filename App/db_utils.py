@@ -169,11 +169,28 @@ def create_db_engine() -> Engine:
 
 def init_schema(engine: Engine | None = None) -> None:
     """Create clients + revenue_requests tables if they do not exist.
+
     The authoritative definition lives in db/schema.sql (heavily commented).
-    This function is the SQLAlchemy equivalent for local repro and migrations.
+    SQLAlchemy ``create_all`` creates tables and simple column indexes only;
+    partial indexes from schema.sql are applied immediately afterward.
     """
     eng = engine or get_db_engine()
     Base.metadata.create_all(eng)
+    partial_indexes = (
+        "CREATE INDEX IF NOT EXISTS idx_clients_status_active "
+        "ON clients (status) WHERE is_deleted = FALSE",
+        "CREATE INDEX IF NOT EXISTS idx_revenue_requests_status "
+        "ON revenue_requests (status) WHERE is_deleted = FALSE",
+        "CREATE INDEX IF NOT EXISTS idx_revenue_requests_due_date "
+        "ON revenue_requests (due_date) WHERE is_deleted = FALSE",
+        "CREATE INDEX IF NOT EXISTS idx_revenue_requests_bank_stmt_received "
+        "ON revenue_requests (bank_statement_received) WHERE is_deleted = FALSE",
+        "CREATE INDEX IF NOT EXISTS idx_revenue_requests_sales_rpt_received "
+        "ON revenue_requests (sales_report_received) WHERE is_deleted = FALSE",
+    )
+    with eng.begin() as conn:
+        for stmt in partial_indexes:
+            conn.execute(text(stmt))
 
 
 @contextmanager

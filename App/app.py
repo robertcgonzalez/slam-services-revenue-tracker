@@ -52,7 +52,8 @@ except ImportError:
     def hybrid_cv_status():
         return {
             "enabled": False,
-            "cv_configured": False,
+            "di_configured": False,
+            "azure_cv_configured": False,
             "ready": False,
             "imaging_first_page": 5,
             "imaging_last_page": None,

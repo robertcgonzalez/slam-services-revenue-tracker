@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
-from app_logging import is_smoke_assessment_pdf, log_event, log_smoke_evidence
+from app_logging import format_pipeline_log, is_smoke_assessment_pdf, log_event, log_smoke_evidence
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 try:
@@ -61,8 +61,6 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "Scripts"
 UPLOAD_WORK_DIR = SCRIPTS_DIR / "_streamlit_bank_uploads"
 
 CROPPED_CHECKS_DIR = SCRIPTS_DIR / "cropped_checks_final_dynamic"
-
-CROPPER_SCRIPT = "smart_check_cropper_final_dynamic.py"
 
 PARSER_SCRIPT = "bank-statement-parser.py"
 
@@ -819,9 +817,7 @@ def expected_csv_path(pdf_path: Path) -> Path:
     return SCRIPTS_DIR / f"{pdf_path.stem}_Transactions_With_Payees.csv"
 
 
-def _log(level: str, message: str) -> str:
-
-    return f"[{level.upper()}] {message}"
+_log = format_pipeline_log
 
 
 def _poppler_available() -> tuple[bool, str]:
@@ -861,12 +857,12 @@ def geometry_imaging_deps_status() -> dict[str, Any]:
 
 
 def cropper_available() -> tuple[bool, str]:
-    """Optional check cropper — never required for transaction extraction."""
+    """Optional check cropper (in-process ``check_cropper_v5``) — never required for transaction extraction."""
 
-    script = SCRIPTS_DIR / CROPPER_SCRIPT
-
-    if not script.is_file():
-        return False, "cropper script not found"
+    try:
+        import check_cropper_v5  # noqa: F401
+    except ImportError:
+        return False, "check_cropper_v5 module not available"
 
     try:
         import cv2  # noqa: F401
@@ -1163,55 +1159,24 @@ def run_statement_pipeline(
             logs.append(_log("info", "Continuing with transaction parser."))
 
         else:
-            logs.append(_log("info", "--- Check cropper (optional) ---"))
-
-            try:
-                proc = subprocess.run(
-                    [py, CROPPER_SCRIPT, str(pdf_path)],
-                    cwd=cwd,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=PIPELINE_TIMEOUT_SEC,
-                    check=False,
-                    env=env,
-                )
-
-                _append_process_output(logs, proc, tail=20)
-
-                if proc.returncode != 0:
-                    cropper_issue = True
-
-                    logs.append(_log("warn", "Cropper exited non-zero; continuing with parser."))
-
-                else:
-                    logs.append(_log("info", "Cropper finished."))
-                    if CROPPED_CHECKS_DIR.is_dir():
-                        cropped_files = sorted(CROPPED_CHECKS_DIR.glob("*.png"))
-                        meta["cropped_dir"] = CROPPED_CHECKS_DIR
-                        meta["cropped_check_count"] = len(cropped_files)
-                        if cropped_files:
-                            logs.append(
-                                _log("info", f"Cropped {len(cropped_files)} check image(s).")
-                            )
-
-                log_event(logger, "bank_stmt_cropper", exit_code=proc.returncode)
-
-            except subprocess.TimeoutExpired:
+            logs.append(_log("info", "--- Check cropper (optional, check_cropper_v5) ---"))
+            crop_logs, crop_meta = run_check_cropper_only(pdf_bytes, filename, logger)
+            logs.extend(crop_logs)
+            for key in (
+                "cropper_skipped",
+                "cropper_user_message",
+                "cropped_dir",
+                "cropped_check_count",
+                "cropper_mode",
+                "cropped_likely_checks",
+                "cropped_likely_deposits",
+            ):
+                if key in crop_meta:
+                    meta[key] = crop_meta[key]
+            if crop_meta.get("cropper_skipped"):
                 cropper_issue = True
-
-                logs.append(_log("warn", "Cropper timed out; continuing with parser."))
-
-            except Exception as exc:
-                cropper_issue = True
-
-                logs.append(_log("warn", f"Cropper failed ({exc}); continuing with parser."))
-
-            if cropper_issue:
-                meta["cropper_skipped"] = True
-
-                meta["cropper_user_message"] = CROPPER_SKIP_USER_MSG
+            elif int(crop_meta.get("cropped_check_count") or 0) > 0:
+                logs.append(_log("info", "Cropper finished."))
 
     else:
         meta["cropper_skipped"] = True
@@ -1603,6 +1568,7 @@ __all__ = [
     "extract_pdf_raw_text",
     "filter_transactions_by_confidence",
     "format_processing_log",
+    "azure_bank_pipeline_status",
     "hybrid_cv_status",
     "load_grok_vision_csv",
     "load_payee_rules",
@@ -2037,11 +2003,13 @@ def reconcile_statement_totals(df: pd.DataFrame, grok_totals: dict | None = None
 # Azure OCR Function client (v2.41) — Strategic Next Milestone from Section 8.1
 # ---------------------------------------------------------------------------
 # Calls the dedicated `slam-ocr-function` Azure Function over HTTPS so heavy
-# OCR / check-cropping stays off the Streamlit App Service. The wire format is
-# documented in `AzureFunctions/ocr_processor/function_app.py`. Failures are
-# always non-fatal — callers fall back to the existing lightweight parser or
-# the Grok CSV paste path so Laura's daily workflow never gets blocked by an
-# infrastructure hiccup.
+# OCR / check-cropping can stay off the Streamlit App Service. The wire format is
+# documented in `AzureFunctions/ocr_processor/function_app.py`.
+#
+# Production Bank Statements (v2.44.19+) require Azure DI credentials — the UI
+# blocks with ``st.stop()`` when unconfigured. Pipeline helpers return structured
+# errors without raising so logs stay usable; they do not fall back to pdfplumber
+# or EasyOCR on the production path.
 
 AZURE_OCR_FUNCTION_URL_ENV = "AZURE_OCR_FUNCTION_URL"
 AZURE_OCR_FUNCTION_KEY_ENV = "AZURE_OCR_FUNCTION_KEY"
@@ -2627,8 +2595,7 @@ def run_azure_ocr_pipeline(
 ) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
     """Call Azure Document Intelligence or the Azure OCR Function and return ``(df, logs, meta)``.
 
-    Behavior mirrors :func:`run_statement_pipeline` so the Bank Statements page
-    can swap implementations on a single radio toggle:
+    Production Bank Statements use this as the sole automated OCR path (Azure DI-only UI).
 
     - ``df`` is the canonical 12-column DataFrame (or ``None`` on error).
     - ``logs`` is a list of structured ``[LEVEL] message`` strings ready for
@@ -2638,9 +2605,9 @@ def run_azure_ocr_pipeline(
       reconciliation banner can fire), ``request_id``, ``service_version``,
       ``message``, ``configured``.
 
-    Failures (missing config, HTTP error, timeout, malformed JSON) never
-    raise — the caller can show a friendly "Azure OCR unavailable, falling
-    back to the lightweight parser" message and continue.
+    Failures (missing config, HTTP error, timeout, malformed JSON) never raise.
+    The caller shows a blocking error when Azure is not configured; there is no
+    automatic fallback to the lightweight parser on the production path.
     """
 
     logs: list[str] = []
@@ -3142,10 +3109,13 @@ def _txn_list_to_df(transactions: list[dict]) -> pd.DataFrame:
     return df[list(GROK_CSV_COLUMNS) + extras].reset_index(drop=True)
 
 
-def hybrid_cv_status() -> dict[str, Any]:
+def azure_bank_pipeline_status() -> dict[str, Any]:
     """Read-only status for the Azure bank-statement pipeline (DI register + check leg)."""
 
     di_ep, di_key = _resolve_document_intelligence_credentials()
+    di_ready = bool(di_ep and di_key)
+    cv_ready = azure_cv_configured()
+
     def _cu_configured() -> bool:
         try:
             from azure_content_understanding import content_understanding_configured
@@ -3173,9 +3143,10 @@ def hybrid_cv_status() -> dict[str, Any]:
     except Exception:
         pass
     return {
-        "available": bool(di_ep and di_key),
-        "cv_configured": bool(di_ep and di_key),
-        "ready": bool(di_ep and di_key),
+        "available": di_ready,
+        "di_configured": di_ready,
+        "azure_cv_configured": cv_ready,
+        "ready": di_ready,
         "enabled": True,
         "cv_placeholder": False,
         "cv_cache_dir": False,
@@ -3196,7 +3167,7 @@ def hybrid_cv_status() -> dict[str, Any]:
             "Set AZURE_DI_ENDPOINT + AZURE_DI_KEY from resource `slam-bank-statements` "
             "(register/tabular). For check-image pages, set CONTENTUNDERSTANDING_ENDPOINT "
             "+ CONTENTUNDERSTANDING_KEY (Foundry Content Understanding)."
-            if not (di_ep and di_key)
+            if not di_ready
             else (
                 "Check imaging uses Document Intelligence until Content Understanding is "
                 "configured (CONTENTUNDERSTANDING_* in .env)."
@@ -3205,6 +3176,12 @@ def hybrid_cv_status() -> dict[str, Any]:
             )
         ),
     }
+
+
+def hybrid_cv_status() -> dict[str, Any]:
+    """Deprecated alias for :func:`azure_bank_pipeline_status` (drift-audit H11)."""
+
+    return azure_bank_pipeline_status()
 
 
 def missing_document_counts(req_df: pd.DataFrame) -> dict[str, int]:

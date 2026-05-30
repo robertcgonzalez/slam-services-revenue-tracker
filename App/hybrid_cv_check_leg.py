@@ -29,6 +29,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from app_logging import format_pipeline_log as _hybrid_log
+
 # Env var names (mirror AZURE_OCR_FUNCTION_* style in bank_statements.py)
 AZURE_CV_ENDPOINT_ENV = "AZURE_CV_ENDPOINT"
 AZURE_CV_KEY_ENV = "AZURE_CV_KEY"
@@ -227,10 +229,6 @@ def cv_lines_to_easyocr_detections(lines: list[dict[str, Any]]) -> list[Any]:
             pts = [(0.0, 0.0), (100.0, 0.0), (100.0, 20.0), (0.0, 20.0)]
         detections.append((pts, text, conf))
     return detections
-
-
-def _hybrid_log(level: str, message: str) -> str:
-    return f"[{level.upper()}] {message}"
 
 
 def _page_in_imaging_range(page: int, first_page: int, last_page: int | None) -> bool:

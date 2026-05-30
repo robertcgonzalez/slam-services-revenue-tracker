@@ -30,6 +30,11 @@ def setup_app_logging() -> logging.Logger:
     return logger
 
 
+def format_pipeline_log(level: str, message: str) -> str:
+    """Format a line for Bank Statements / OCR processing log expanders."""
+    return f"[{level.upper()}] {message}"
+
+
 def log_event(logger: logging.Logger, event: str, **fields: object) -> None:
     parts = [f"{k}={v!r}" for k, v in fields.items() if v is not None]
     detail = " ".join(parts)
