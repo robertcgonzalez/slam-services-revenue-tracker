@@ -131,6 +131,8 @@ dual-agent run "..." --export transcript.md
 - The tool respects your existing `.cursor/rules` and Grok project rules when the agents run.
 - Cursor SDK runs inherit the permissions of the API key you provide.
 
+**Azure Autonomy (SLAM Services)**: For full autonomous Azure operations (recommended), configure the dedicated Service Principal as documented in the project at `docs/security/dual-agent-azure-credentials.md`. This allows Cursor agents to perform deployments, config changes, and verification without depending on local IDE extensions.
+
 ### SLAM Services specific (this repo)
 When running dual-agent here, the project's mandatory git hygiene still applies inside the autonomous loop:
 - Before any commit/push, agents **must** run `.\Scripts\PowerShell\Invoke-GitVerification.ps1` and receive a clean result.

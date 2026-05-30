@@ -43,6 +43,17 @@ param(
     [switch]$SkipDoctor
 )
 
+# === Inject Azure credentials for Cursor agent autonomy ===
+$azureEnv = @{}
+if ($env:AZURE_CLIENT_ID) { $azureEnv['AZURE_CLIENT_ID'] = $env:AZURE_CLIENT_ID }
+if ($env:AZURE_CLIENT_SECRET) { $azureEnv['AZURE_CLIENT_SECRET'] = $env:AZURE_CLIENT_SECRET }
+if ($env:AZURE_TENANT_ID) { $azureEnv['AZURE_TENANT_ID'] = $env:AZURE_TENANT_ID }
+
+# Merge into the environment the Python process will see
+foreach ($key in $azureEnv.Keys) {
+    [System.Environment]::SetEnvironmentVariable($key, $azureEnv[$key], 'Process')
+}
+
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 

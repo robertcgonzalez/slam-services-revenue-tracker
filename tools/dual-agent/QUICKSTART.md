@@ -40,14 +40,14 @@ Get the key here: https://cursor.com/dashboard/integrations
 
 ```powershell
 # From repo root
-.\Scripts\PowerShell\Invoke-DualAgentHandoff.ps1 -Task "Improve error handling in the payee extractor" -MaxTurns 4
+.\Scripts\PowerShell\Invoke-DualAgentHandoff.ps1 -Task "Improve error handling in the payee extractor end-to-end (full validation + CLI tests)" -MaxTurns 15
 ```
 
 **Direct (after activating the local venv or using global PATH install)**:
 
 ```powershell
 dual-agent doctor   # Always run this first
-dual-agent run "Improve error handling in the payee extractor" --mode reviewer-implementer
+dual-agent run "Improve error handling in the payee extractor end-to-end (all steps, full verification)" --mode reviewer-implementer --max-turns 15
 ```
 
 ## Common Commands

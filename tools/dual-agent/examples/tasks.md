@@ -1,11 +1,11 @@
 # Example High-Value Tasks for dual-agent
 
-These are battle-tested task descriptions that work especially well with the reviewer-implementer and researcher-builder modes.
+These are battle-tested task descriptions. With the prime directive, use higher --max-turns (15+) so the agents autonomously drive the *full* goal (every code change + every CLI execution + verification) to TASK COMPLETE with no human review summaries mid-run. The orchestrator injects the overriding full-autonomy rules on every turn.
 
 ## Code Quality & Hardening
 
 ```bash
-dual-agent run "Audit the entire payee_extractor/ directory for robustness, error handling, and logging. Add production-grade error boundaries, structured logging, and defensive checks. Do not change external behavior." --mode reviewer-implementer --max-turns 6
+dual-agent run "Audit the entire payee_extractor/ directory for robustness, error handling, and logging. Add production-grade error boundaries, structured logging, and defensive checks. Do not change external behavior." --mode reviewer-implementer --max-turns 15
 ```
 
 ## Large Refactors

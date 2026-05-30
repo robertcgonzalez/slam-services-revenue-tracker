@@ -14,13 +14,12 @@ from rich.table import Table
 import sys
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     except Exception:
-        # Fallback for very old Python / environments
         import os
-        os.environ["PYTHONIOENCODING"] = "utf-8"
-        os.environ["PYTHONLEGACYWINDOWSSTDIO"] = "1"
+        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+        os.environ.setdefault("PYTHONLEGACYWINDOWSSTDIO", "1")
 
 from .config import DualAgentSettings, CollaborationMode
 from .orchestrator import DualAgentOrchestrator
@@ -44,7 +43,7 @@ def run(
     ] = "reviewer-implementer",
     max_turns: Annotated[
         int | None,
-        typer.Option("--max-turns", help="Maximum number of back-and-forth turns.")
+        typer.Option("--max-turns", help="Maximum turns before forced stop. Use 12-30+ for full autonomous end-to-end tasks (prime directive drives natural TASK COMPLETE when whole goal is done).")
     ] = None,
     cursor_model: Annotated[str | None, typer.Option("--cursor-model")] = None,
     grok_model: Annotated[str | None, typer.Option("--grok-model")] = None,
@@ -148,12 +147,12 @@ def modes() -> None:
     table.add_column("Description", style="white")
 
     descriptions = {
-        "freeform": "Both agents speak freely. Good for open exploration.",
-        "reviewer-implementer": "Cursor writes code. Grok reviews and critiques. Excellent for quality.",
-        "researcher-builder": "Grok researches + plans. Cursor executes. Great for spikes and new areas.",
-        "critic-refiner": "One agent proposes, the other relentlessly finds weaknesses.",
-        "architect-coder": "Grok does high-level design. Cursor implements faithfully.",
-        "custom": "You define the relationship between the two agents.",
+        "freeform": "Free turns, but prime directive applies: address only the other agent; iterate to full task goal only.",
+        "reviewer-implementer": "Cursor implements + executes (full CLI/auth). Grok reviews *directly to Cursor*. Autonomous loop to entire task complete (prime directive overrides all phase signals).",
+        "researcher-builder": "Grok plans/research. Cursor executes every step (code, CLI, test, deploy). Full autonomous run until whole goal done.",
+        "critic-refiner": "Agents relentlessly critique each other (direct address only). No human summaries. Ends only on full TASK COMPLETE.",
+        "architect-coder": "Grok high-level design. Cursor implements+executes all the way. Prime directive: full goal, agent-to-agent only.",
+        "custom": "Your relationship prompt + mandatory prime directive overlay (full autonomous iteration, no mid-run human summaries).",
     }
 
     for name in MODE_PROMPTS.keys():
@@ -179,7 +178,7 @@ def doctor() -> None:
         console.print("[red][FAIL][/red] CURSOR_API_KEY is missing or invalid in .env")
         console.print("[dim]   Get one at: https://cursor.com/dashboard/integrations")
         console.print("[dim]   Then add CURSOR_API_KEY=cur_... (or crsr_...) to .env")
-        console.print("[dim]   (in project root, tools/dual-agent/.env, or ~/.grok/tools/dual-agent/.env)[/dim]")
+        console.print("[dim]   The tool now checks tools/dual-agent/.env first (most reliable for SLAM work via the Invoke wrapper).[/dim]")
         console.print("[dim]   (Real Cursor agent creation test will be skipped)[/dim]")
         key_ok = False
         ok = False
@@ -241,7 +240,7 @@ def doctor() -> None:
 
     console.print()
     if ok:
-        console.print("[bold green]Environment looks good. Autonomous Grok ↔ Cursor handoff should work.[/bold green]")
+        console.print("[bold green]Environment looks good. Full autonomous Grok ↔ Cursor iteration (prime directive: entire task, no mid-run human summaries) should work at full capacity.[/bold green]")
     else:
         console.print("[bold red]Problems detected. Fix the issues above before running real collaborations.[/bold red]")
         console.print("[bold red]Some checks failed. Fix the issues above before running dual-agent.[/bold red]")
@@ -252,7 +251,8 @@ def doctor() -> None:
         console.print()
         console.print("[yellow]Note: You are running on Python >= 3.12.[/yellow]")
         console.print("[yellow]For SLAM Services work, the strongly recommended path is the project's hardened Python 3.10 venv:[/yellow]")
-        console.print("[yellow]  .\\Scripts\\PowerShell\\Invoke-DualAgentHandoff.ps1 -Directive \"docs/handoffs/xxx.md\"[/yellow]")
+        console.print("[yellow]  .\\Scripts\\PowerShell\\Invoke-DualAgentHandoff.ps1 -Directive \"docs/handoffs/xxx.md\" -MaxTurns 15[/yellow]")
+        console.print("[yellow]  (Prime directive ensures full autonomous run to complete goal; use higher MaxTurns for end-to-end tasks.)[/yellow]")
 
 
 @app.command("templates")
