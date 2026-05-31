@@ -1827,6 +1827,7 @@ __all__ = [
     "PIVOT_GROUP_BY_OPTIONS",
     "PIVOT_VALUE_KIND_OPTIONS",
     "RECONCILIATION_AMOUNT_TOLERANCE",
+    "RECONCILIATION_HUMAN_REVIEW_GUIDANCE",
     "UPLOAD_WORK_DIR",
     "ZERO_TRANSACTIONS_MSG",
     "apply_payee_rules",
@@ -2177,6 +2178,11 @@ def build_statement_pivot(
 
 # Penny-level tolerance for comparing reported vs. computed dollar totals.
 RECONCILIATION_AMOUNT_TOLERANCE = 0.01
+RECONCILIATION_HUMAN_REVIEW_GUIDANCE = (
+    "Laura/Stef: compare detailed rows to the bank statement, edit the table below, "
+    "or add a review note. Residual total gaps may be accepted after human confirmation "
+    "(see reconciliation banner note)."
+)
 
 
 def reconciliation_reference_totals(
@@ -2295,6 +2301,7 @@ def reconcile_statement_totals(df: pd.DataFrame, grok_totals: dict | None = None
         "message": message,
         "differences": differences,
         "needs_review": True,
+        "human_review_guidance": RECONCILIATION_HUMAN_REVIEW_GUIDANCE,
         "computed": computed,
         "reported": dict(grok_totals),
     }
@@ -2776,9 +2783,10 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     the same dollar amount (Gate A3 Auto Body Δ $273.45 residual).
     """
 
-    stats = {
+    stats: dict[str, Any] = {
         "dedupe_dropped_register_debit_match": 0,
         "dedupe_dropped_supplemental_dup": 0,
+        "dedupe_dropped_notes": [],
     }
     if df is None or df.empty:
         return df, stats
@@ -2817,6 +2825,14 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
                 continue
             if any(abs(float(amt) - float(r)) <= _AMOUNT_MATCH_TOLERANCE for r in reg_amts):
                 drop_rows.append(idx)
+                payee = str(
+                    work.at[idx, "Payee"]
+                    if "Payee" in work.columns
+                    else work.at[idx, "Description"] or ""
+                ).strip()[:40]
+                stats["dedupe_dropped_notes"].append(
+                    f"register_debit_match ${float(amt):,.2f} {payee or '(no payee)'}"
+                )
         if drop_rows:
             stats["dedupe_dropped_register_debit_match"] = len(drop_rows)
             work = work.drop(index=drop_rows)
@@ -2833,6 +2849,9 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
             key = _supplemental_row_dedupe_key(work.loc[idx])
             if key in seen_supp_keys and key[0] > 0:
                 drop_rows.append(idx)
+                stats["dedupe_dropped_notes"].append(
+                    f"supplemental_dup ${key[0]:,.2f} {key[1] or '(no payee)'}"
+                )
             else:
                 seen_supp_keys.add(key)
         if drop_rows:
@@ -3290,9 +3309,18 @@ def _run_azure_ocr_via_document_intelligence(
         meta["dedupe_dropped_supplemental_dup"] = int(
             dedupe_stats.get("dedupe_dropped_supplemental_dup") or 0
         )
+        dedupe_notes = list(dedupe_stats.get("dedupe_dropped_notes") or [])[:12]
+        if dedupe_notes:
+            meta["dedupe_dropped_notes"] = dedupe_notes
         if dedupe_stats.get("dedupe_dropped_register_debit_match") or dedupe_stats.get(
             "dedupe_dropped_supplemental_dup"
         ):
+            note_suffix = ""
+            if dedupe_notes:
+                preview = "; ".join(dedupe_notes[:5])
+                if len(dedupe_notes) > 5:
+                    preview += f"; … (+{len(dedupe_notes) - 5} more)"
+                note_suffix = f" Skipped: {preview}."
             logs.append(
                 _log(
                     "info",
@@ -3300,9 +3328,30 @@ def _run_azure_ocr_via_document_intelligence(
                     f"{dedupe_stats.get('dedupe_dropped_register_debit_match', 0)} supplemental row(s) "
                     "matched register debits; "
                     f"{dedupe_stats.get('dedupe_dropped_supplemental_dup', 0)} duplicate supplemental "
-                    "row(s) collapsed.",
+                    f"row(s) collapsed.{note_suffix}",
                 )
             )
+        skip_parts: list[str] = []
+        for label, key in (
+            ("register dedup", "supplemental_skipped_duplicates"),
+            ("amount-only", "supplemental_skipped_by_amount"),
+            ("check# match", "supplemental_skipped_by_check_number"),
+            ("outliers", "supplemental_rejected_outliers"),
+            ("deposit slips", "supplemental_rejected_deposits"),
+        ):
+            n = int(assembly_stats.get(key) or 0)
+            if n:
+                skip_parts.append(f"{n} {label}")
+        if skip_parts:
+            logs.append(
+                _log(
+                    "info",
+                    "Assembly skips (human review if totals mismatch): "
+                    + ", ".join(skip_parts)
+                    + ".",
+                )
+            )
+            meta["assembly_skip_summary"] = ", ".join(skip_parts)
         meta["transaction_count"] = int(len(df))
         meta["azure_di_meta"] = di_meta
         meta["pages_analyzed"] = pages_str

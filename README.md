@@ -40,17 +40,17 @@ python Scripts/health_check.py --full
 
 ---
 
-## Current Status (June 2026 — v2.45.3)
+## Current Status (June 2026 — v2.45.4)
 
-- **Laura/Stef pilot active (Path A)**; Gate A3 HCC PASS; **Auto Body withdrawal fix v2.45.4** (dedupe RCA — production re-smoke pending; see `QMS/State-Alignment/runs/2026-05-31-v2454-auto-body-dedupe-fix.md`).
+- **Laura/Stef pilot active (Path A)**; Gate A3 HCC PASS; **Auto Body Δ $273.45 owner-accepted** — human review via reconciliation banner + optional note (`QMS/State-Alignment/runs/2026-05-31-v2454-deploy-resmoke.md`).
 - **Deploy discipline:** after every `Deploy-ToAzure.ps1`, run Gate A3 headless smoke + evidence collection — see [`docs/deployment.md`](docs/deployment.md) (or `-RunGateA3Smoke`).
-- **v2.45.3 deploy** (`1dfb6b3f`): v2.45.2 tightening live on Azure; re-smoke evidence in [`QMS/State-Alignment/runs/2026-05-31-v2453-deploy-resmoke.md`](QMS/State-Alignment/runs/2026-05-31-v2453-deploy-resmoke.md).
+- **v2.45.4 deploy** (`b013ddfa`): dedupe fix + human-review UI live on Azure; re-smoke evidence in [`QMS/State-Alignment/runs/2026-05-31-v2454-deploy-resmoke.md`](QMS/State-Alignment/runs/2026-05-31-v2454-deploy-resmoke.md).
 
 ### Production (Azure App Service — DI-only)
 
 - **Bank Statements**: **Azure Document Intelligence only** when `AZURE_DI_*` App Settings are set. `App/app.py` hardcodes `run_mode = "azure_ocr"` and stops with a clear error if Azure DI is not configured — no processing-mode radios, no Local Enhanced path, no lightweight-parser fallback on the live UI.
 - **DI pipeline**: Two-leg path in `App/bank_statements.py` + `App/azure_document_intelligence.py` — register via `prebuilt-bankStatement.us`, imaging via geometric cropper v5 + `prebuilt-check.us` per crop. Enablement: `Scripts/PowerShell/Set-AzureBankStatementDIAppSettings.ps1`; runbook: `docs/DI-Go-Live-Commands.md`, `docs/go-live-execution-runbook.md`.
-- **Gate A3 (check/imaging leg)**: **HCC PASS; Auto Body withdrawals NEEDS WORK** (production re-smoke 2026-05-31, deploy `1dfb6b3f`). HCC: 98 rows, gold totals, 42 crops, `payee_rules_applied` 6. Auto Body: **94 rows**, deposits **$41,786.80** (gold match), withdrawals **$41,130.18** vs gold **$41,403.63** (50 supplemental, 56 crops, `payee_rules_applied` 3). Headless smoke: `Invoke-GateA3HeadlessSmoke.ps1` then `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`. Detail: [`QMS/State-Alignment/runs/2026-05-31-v2453-deploy-resmoke.md`](QMS/State-Alignment/runs/2026-05-31-v2453-deploy-resmoke.md).
+- **Gate A3 (check/imaging leg)**: **HCC PASS; Auto Body withdrawals human-review territory** (production re-smoke 2026-05-31, deploy `b013ddfa`). HCC: 98 rows, gold totals, 42 crops, `payee_rules_applied` 6. Auto Body: **94 rows**, deposits **$41,786.80** (gold match), withdrawals **$41,130.18** vs gold **$41,403.63** (Δ **$273.45** — owner-accepted; Laura/Stef finalize in reconciliation UI). Headless smoke: `Invoke-GateA3HeadlessSmoke.ps1` then `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`. Detail: [`QMS/State-Alignment/runs/2026-05-31-v2454-deploy-resmoke.md`](QMS/State-Alignment/runs/2026-05-31-v2454-deploy-resmoke.md).
 - **Data layer**: Azure PostgreSQL (`USE_POSTGRES=true`); canonical schema in `db/schema.sql` and `docs/data-model.md`.
 - **Daily driver (Laura/Stef)**: Dashboard, Revenue Requests, Bank Statements, payee rules on App Service (B2). QMS visibility in sidebar + `health_check.py --qms` (O-002, v2.44.21).
 

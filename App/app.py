@@ -1558,6 +1558,7 @@ def _render_grok_csv_paste_section(selected_client: str) -> None:
                     # Reset any prior reconciliation flags so the new load is judged fresh.
                     st.session_state.pop("bank_stmt_needs_review", None)
                     st.session_state.pop("bank_stmt_reconciliation", None)
+                    st.session_state.pop("bank_stmt_reconciliation_note", None)
                     totals_note = (
                         " · TOTALS line detected (will reconcile against detail rows)"
                         if grok_totals
@@ -2286,6 +2287,19 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
                         )
                     if rows:
                         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                    guidance = recon.get("human_review_guidance") or (
+                        "Compare detailed rows to the bank statement before proceeding."
+                    )
+                    st.info(guidance)
+                    review_note = st.text_area(
+                        "Reconciliation review note (optional — for Laura/Stef handoff)",
+                        value=st.session_state.get("bank_stmt_reconciliation_note", ""),
+                        key="bank_stmt_reconciliation_note_input",
+                        placeholder="e.g. Accepted $273.45 withdrawal gap after manual check of imaging rows.",
+                        height=80,
+                    )
+                    if review_note != st.session_state.get("bank_stmt_reconciliation_note", ""):
+                        st.session_state["bank_stmt_reconciliation_note"] = review_note
                     st.caption(
                         "The whole statement is flagged for review. Re-check the detailed rows "
                         "against the bank statement (or re-run Grok) before proceeding."
@@ -2565,6 +2579,7 @@ def _run_bank_statement_azure_process(
     )
     st.session_state.pop("bank_stmt_needs_review", None)
     st.session_state.pop("bank_stmt_reconciliation", None)
+    st.session_state.pop("bank_stmt_reconciliation_note", None)
     if last_df is not None:
         row_count = len(last_df)
         if row_count == 0:

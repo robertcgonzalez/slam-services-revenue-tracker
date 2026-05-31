@@ -39,13 +39,14 @@ Secondary: supplemental duplicate collapse used amount-only keys, collapsing dis
 - `Scripts/test_azure_assembly.py` — all pass (incl. `test_dedupe_preserves_supplemental_when_only_register_deposit_matches`, `test_auto_body_273_gap_regression_assembly`)
 - `ruff check` on touched files
 
-**Pending**: production `Invoke-GateA3HeadlessSmoke.ps1` after deploy (PDF not in repo).
+**Production re-smoke**: see `2026-05-31-v2454-deploy-resmoke.md` — withdrawals unchanged ($41,130.18); owner accepts Δ $273.45 with human review.
 
 ---
 
-## Before / after (expected)
+## Before / after (production re-smoke)
 
-| Metric | Before (v2.45.3 smoke) | After (target post-deploy) |
-|--------|------------------------|----------------------------|
-| Auto Body withdrawals | $41,130.18 | → $41,403.63 (±$100 tol) |
-| Dedupe false drops | Silent (deposit collision) | 0 when only deposit matches |
+| Metric | Before (v2.45.3 smoke) | After (v2.45.4 deploy) |
+|--------|------------------------|------------------------|
+| Auto Body withdrawals | $41,130.18 | $41,130.18 (Δ $273.45 — human review) |
+| Dedupe false drops (deposit collision) | Possible in code path | Fix live; gap persists from other imaging-leg causes |
+| Human review path | Reconciliation banner only | Banner + guidance + optional review note + skip logging |
