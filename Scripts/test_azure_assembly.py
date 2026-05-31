@@ -275,7 +275,114 @@ def test_trim_supplemental_to_withdrawal_budget() -> None:
     ]
     trimmed, dropped = bs._trim_supplemental_to_withdrawal_budget(supplemental, 800.0)
     assert dropped >= 1
-    assert sum(abs(float(r["SignedAmount"])) for r in trimmed) <= 1300.0
+    assert sum(abs(float(r["SignedAmount"])) for r in trimmed) <= 900.0
+
+
+def test_trim_keeps_all_rows_when_under_budget_despite_row_cap() -> None:
+    """Auto Body regression: do not cap row count while supplemental total is under budget."""
+
+    supplemental = [_check_row(f"Check {i}", 200.0 + i, check_number=str(1000 + i)) for i in range(50)]
+    trimmed, dropped = bs._trim_supplemental_to_withdrawal_budget(
+        supplemental,
+        41403.63,
+        max_rows=49,
+    )
+    assert dropped == 0
+    assert len(trimmed) == 50
+
+
+def test_prune_register_keeps_unmatched_debits() -> None:
+    """Only explicitly matched register rows are removed — not all non-EFT debits."""
+
+    register = [
+        {
+            "Date": "2026-01-15",
+            "Description": "Deposit",
+            "Payee": "",
+            "Amount": "6904.99",
+            "Check#": "",
+            "SignedAmount": "6904.99",
+            "Category": "Uncategorized",
+        },
+        _register_row("Unmatched tabular check", 273.45),
+        _register_row("EFT ACH", 500.0),
+    ]
+    supplemental = [_check_row(f"Imaging {i}", 150.0 + i) for i in range(50)]
+    _, _, prune_indices = bs._filter_supplemental_check_txns(register, supplemental)
+    pruned = bs._prune_register_for_supplemental(
+        register,
+        register_incomplete=True,
+        supplemental=supplemental,
+        prune_indices=prune_indices,
+    )
+    assert len(pruned) == 3
+    assert any("Unmatched tabular" in r["Description"] for r in pruned)
+
+
+def test_auto_body_withdrawal_residual_scenario() -> None:
+    """Gate A3 Auto Body: keep unmatched register debit + supplemental imaging leg ≈ gold."""
+
+    register = [_register_row("Unmatched tabular check", 273.45)]
+    register.extend(
+        {
+            "Date": "2026-01-15",
+            "Description": f"Deposit {i}",
+            "Payee": "",
+            "Amount": "100.00",
+            "Check#": "",
+            "SignedAmount": "100.00",
+            "Category": "Uncategorized",
+        }
+        for i in range(43)
+    )
+    supplemental = [
+        _check_row(f"Imaging check {i}", 822.6036 + (i - 25) * 0.01) for i in range(50)
+    ]
+
+    register_kept = bs._prune_register_for_supplemental(
+        register,
+        register_incomplete=True,
+        supplemental=supplemental,
+        prune_indices=set(),
+    )
+    supplemental, trimmed = bs._trim_supplemental_to_withdrawal_budget(
+        supplemental,
+        41403.63,
+        max_rows=49,
+    )
+    assert trimmed == 0
+    assert len(register_kept) == 44
+
+    for row in register_kept:
+        row["Source"] = "register"
+    for row in supplemental:
+        row["Source"] = "check_image_crop"
+    df = bs._parse_ocr_response_to_df({"transactions": register_kept + supplemental})
+    df = bs._dedupe_azure_transactions(df)
+    metrics = bs.transaction_summary_metrics(df)
+    assert len(df) >= 85
+    assert abs(float(metrics["withdrawals"]) - 41403.63) <= 100.0
+
+
+def test_reconciliation_reference_from_statement_summary() -> None:
+    summary = {"deposits": 41786.80, "withdrawals": 41403.63, "withdrawals_count": 49}
+    ref = bs.reconciliation_reference_totals(None, summary)
+    assert ref is not None
+    assert ref["withdrawals"] == 41403.63
+    assert ref["checks"] == 49
+
+
+def test_iqr_outlier_rejects_memo_bleed_not_valid_checks() -> None:
+    register = [_register_row("Tabular", 50.0) for _ in range(44)]
+    checks = [_check_row(f"Vendor {i}", 250.0 + i * 3, check_number=str(2000 + i)) for i in range(45)]
+    checks.append(_check_row("Memo OCR bleed", 52_500.00))
+    checks.append(_check_row("Valid large", 4995.71, check_number="2099"))
+
+    supplemental, stats, _ = bs._filter_supplemental_check_txns(register, checks)
+    amounts = [abs(float(r["SignedAmount"])) for r in supplemental]
+    assert 52_500.0 not in amounts
+    assert stats["supplemental_rejected_outliers"] >= 1
+    assert 4995.71 in amounts
 
 
 def _run_payee_rules_sample_test(rules_path: Path) -> None:
@@ -348,6 +455,11 @@ def main() -> int:
     test_duplicate_check_number_keeps_median_nearest()
     test_pick_best_checks_per_crop()
     test_trim_supplemental_to_withdrawal_budget()
+    test_trim_keeps_all_rows_when_under_budget_despite_row_cap()
+    test_prune_register_keeps_unmatched_debits()
+    test_auto_body_withdrawal_residual_scenario()
+    test_reconciliation_reference_from_statement_summary()
+    test_iqr_outlier_rejects_memo_bleed_not_valid_checks()
     test_dedupe_azure_transactions_collapses_supplemental_amount_dupes()
     with tempfile.TemporaryDirectory() as tmp:
         _run_payee_rules_sample_test(Path(tmp) / "payee_rules.csv")

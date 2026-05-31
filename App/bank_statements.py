@@ -1669,6 +1669,7 @@ __all__ = [
     "local_enhanced_ocr_available",
     "missing_document_counts",
     "reconcile_statement_totals",
+    "reconciliation_reference_totals",
     "resolve_payee_rules_path",
     "rules_library_summary",
     "run_azure_ocr_pipeline",
@@ -1997,6 +1998,27 @@ def build_statement_pivot(
 RECONCILIATION_AMOUNT_TOLERANCE = 0.01
 
 
+def reconciliation_reference_totals(
+    grok_totals: dict | None,
+    statement_summary: dict | None = None,
+) -> dict | None:
+    """Build reconciliation anchor from Grok TOTALS line or Azure DI Statement Summary."""
+
+    if grok_totals:
+        return grok_totals
+    if not statement_summary:
+        return None
+    ref: dict[str, Any] = {
+        "deposits": statement_summary.get("deposits"),
+        "withdrawals": statement_summary.get("withdrawals"),
+        "checks": statement_summary.get("withdrawals_count"),
+        "transactions": None,
+    }
+    if any(ref.get(k) is not None for k in ("deposits", "withdrawals", "checks")):
+        return ref
+    return None
+
+
 def reconcile_statement_totals(df: pd.DataFrame, grok_totals: dict | None = None) -> dict[str, Any]:
     """Compare computed totals from detailed rows against Grok's reported TOTALS line.
 
@@ -2254,6 +2276,8 @@ def _normalize_check_number(value: Any) -> str:
 _AMOUNT_MATCH_TOLERANCE = 0.01
 # OCR on check crops occasionally reads routing/account numbers as amounts (Gate A3 Auto Body).
 _CHECK_AMOUNT_ABSOLUTE_CAP = 10_000.0
+# Supplemental trim tolerance — align imaging-leg withdrawals to Statement Summary (Gate A3).
+_SUPPLEMENTAL_TRIM_TOLERANCE = 100.0
 
 
 def _check_number_from_register_row(row: dict[str, Any]) -> str:
@@ -2295,13 +2319,31 @@ def _filter_implausible_check_txns(
     if not check_txns:
         return [], 0
 
-    kept: list[dict[str, Any]] = []
+    import statistics
+
+    candidates: list[dict[str, Any]] = []
     rejected = 0
     for txn in check_txns:
         amt = _parse_transaction_amount(txn)
         if amt is None or abs(amt) <= 0:
             continue
         if abs(amt) > _CHECK_AMOUNT_ABSOLUTE_CAP:
+            rejected += 1
+            continue
+        candidates.append(txn)
+
+    if len(candidates) < 4:
+        return candidates, rejected
+
+    amounts = sorted(abs(_parse_transaction_amount(t) or 0.0) for t in candidates)
+    q1, _, q3 = statistics.quantiles(amounts, n=4)
+    iqr = q3 - q1
+    upper_fence = q3 + max(3.0 * iqr, 500.0)
+
+    kept: list[dict[str, Any]] = []
+    for txn in candidates:
+        amt = abs(_parse_transaction_amount(txn) or 0.0)
+        if amt > upper_fence and not _normalize_check_number(txn.get("Check#")):
             rejected += 1
             continue
         kept.append(txn)
@@ -2463,11 +2505,12 @@ def _filter_supplemental_check_txns(
     if not check_txns:
         return [], stats, register_prune_indices
 
-    check_txns, rejected = _filter_implausible_check_txns(check_txns)
-    stats["supplemental_rejected_outliers"] = rejected
     deposit_like = sum(1 for t in check_txns if _check_txn_looks_like_deposit(t))
     check_txns = [t for t in check_txns if not _check_txn_looks_like_deposit(t)]
     stats["supplemental_rejected_deposits"] = deposit_like
+
+    check_txns, rejected = _filter_implausible_check_txns(check_txns)
+    stats["supplemental_rejected_outliers"] = rejected
     check_txns = _resolve_duplicate_check_numbers(check_txns)
     check_txns = _dedupe_check_txn_rows(check_txns)
 
@@ -2526,19 +2569,12 @@ def _prune_register_for_supplemental(
     supplemental: list[dict[str, Any]],
     prune_indices: set[int],
 ) -> list[dict[str, Any]]:
-    """Drop register rows superseded by imaging-leg checks; keep deposits and EFT debits."""
+    """Drop only register rows explicitly matched to imaging-leg checks."""
 
     if not register_incomplete or not supplemental:
         return register_txns
 
-    kept: list[dict[str, Any]] = []
-    for idx, row in enumerate(register_txns):
-        if idx in prune_indices:
-            continue
-        if _is_register_debit(row) and not _register_debit_is_eft_like(row):
-            continue
-        kept.append(row)
-    return kept
+    return [row for idx, row in enumerate(register_txns) if idx not in prune_indices]
 
 
 def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
@@ -2568,13 +2604,21 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
         and "Check#" in work.columns
     ):
         no_chk = work["Check#"].astype(str).str.strip() == ""
-        reg_amts = set(work.loc[work["Source"] == "register", "_abs_amt"].dropna())
-        drop_mask = (
-            no_chk
-            & (work["Source"] == "check_image_crop")
-            & work["_abs_amt"].isin(reg_amts)
-        )
-        work = work[~drop_mask]
+        reg_amts = work.loc[work["Source"] == "register", "_abs_amt"].dropna().tolist()
+        drop_rows: list[int] = []
+        for idx in work.index:
+            if not (
+                no_chk.loc[idx]
+                and work.at[idx, "Source"] == "check_image_crop"
+            ):
+                continue
+            amt = work.at[idx, "_abs_amt"]
+            if pd.isna(amt):
+                continue
+            if any(abs(float(amt) - float(r)) <= _AMOUNT_MATCH_TOLERANCE for r in reg_amts):
+                drop_rows.append(idx)
+        if drop_rows:
+            work = work.drop(index=drop_rows)
 
         # Collapse duplicate amount-only supplemental rows (multi-crop OCR bleed).
         seen_supp_amts: set[float] = set()
@@ -2656,7 +2700,7 @@ def _trim_supplemental_to_withdrawal_budget(
     supplemental: list[dict[str, Any]],
     budget: float,
     *,
-    tolerance: float = 500.0,
+    tolerance: float = _SUPPLEMENTAL_TRIM_TOLERANCE,
     max_rows: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Drop lowest-quality supplemental rows when imaging leg overshoots summary withdrawals."""
@@ -2665,7 +2709,8 @@ def _trim_supplemental_to_withdrawal_budget(
         return supplemental, 0
 
     total = sum(abs(_parse_transaction_amount(row) or 0.0) for row in supplemental)
-    if total <= budget + tolerance and (max_rows is None or len(supplemental) <= max_rows):
+    # Row cap applies only when overshooting — never drop rows while still under budget.
+    if total <= budget + tolerance:
         return supplemental, 0
 
     import statistics

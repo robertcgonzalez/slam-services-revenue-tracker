@@ -27,6 +27,7 @@ try:
         load_payee_rules,
         missing_document_counts,
         reconcile_statement_totals,
+        reconciliation_reference_totals,
         resolve_payee_rules_path,
         rules_library_summary,
         run_azure_ocr_pipeline,
@@ -2225,67 +2226,73 @@ def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None
         ]
         view_df = txn_df[display_cols] if display_cols else txn_df
 
-        recon = reconcile_statement_totals(txn_df, st.session_state.get("bank_stmt_grok_totals"))
+        recon_ref = reconciliation_reference_totals(
+            st.session_state.get("bank_stmt_grok_totals"),
+            st.session_state.get("bank_stmt_statement_summary")
+            or (ocr_meta.get("statement_summary") if isinstance(ocr_meta, dict) else None),
+        )
+        recon = reconcile_statement_totals(txn_df, recon_ref)
         st.session_state["bank_stmt_reconciliation"] = recon
-        if recon["status"] == "match":
-            st.success(f"✅ **Totals match source statement.** {recon['message']}")
-        elif recon["status"] == "mismatch":
-            st.session_state["bank_stmt_needs_review"] = True
-            st.error(f"⚠️ **Reconciliation mismatch — review required.** {recon['message']}")
-            with st.expander("Reconciliation details", expanded=True):
-                rows = []
-                reported = recon.get("reported") or {}
-                computed = recon.get("computed") or {}
-                differences = recon.get("differences") or {}
-                for key in ("deposits", "withdrawals", "checks", "transactions"):
-                    rep = reported.get(key)
-                    comp = computed.get(key)
-                    if rep is None and comp is None:
-                        continue
-                    is_amount = key in ("deposits", "withdrawals")
-                    diff_info = differences.get(key)
-                    if rep is None:
-                        rep_display = "—"
-                    elif is_amount:
-                        rep_display = f"${float(rep):,.2f}"
-                    else:
-                        rep_display = f"{int(rep)}"
-                    if comp is None:
-                        comp_display = "—"
-                    elif is_amount:
-                        comp_display = f"${float(comp):,.2f}"
-                    else:
-                        comp_display = f"{int(comp)}"
-                    if diff_info is None:
-                        diff_display = "✅ match"
-                    elif is_amount:
-                        diff_display = f"⚠️ off by ${diff_info['diff']:+,.2f}"
-                    else:
-                        diff_display = f"⚠️ off by {diff_info['diff']:+d}"
-                    rows.append(
-                        {
-                            "Field": key.title(),
-                            "Source (Grok TOTALS)": rep_display,
-                            "Detailed rows (computed)": comp_display,
-                            "Status": diff_display,
-                        }
+        if recon_ref:
+            if recon["status"] == "match":
+                st.success(f"✅ **Totals match source statement.** {recon['message']}")
+            elif recon["status"] == "mismatch":
+                st.session_state["bank_stmt_needs_review"] = True
+                st.error(f"⚠️ **Reconciliation mismatch — review required.** {recon['message']}")
+                with st.expander("Reconciliation details", expanded=True):
+                    rows = []
+                    reported = recon.get("reported") or {}
+                    computed = recon.get("computed") or {}
+                    differences = recon.get("differences") or {}
+                    for key in ("deposits", "withdrawals", "checks", "transactions"):
+                        rep = reported.get(key)
+                        comp = computed.get(key)
+                        if rep is None and comp is None:
+                            continue
+                        is_amount = key in ("deposits", "withdrawals")
+                        diff_info = differences.get(key)
+                        if rep is None:
+                            rep_display = "—"
+                        elif is_amount:
+                            rep_display = f"${float(rep):,.2f}"
+                        else:
+                            rep_display = f"{int(rep)}"
+                        if comp is None:
+                            comp_display = "—"
+                        elif is_amount:
+                            comp_display = f"${float(comp):,.2f}"
+                        else:
+                            comp_display = f"{int(comp)}"
+                        if diff_info is None:
+                            diff_display = "✅ match"
+                        elif is_amount:
+                            diff_display = f"⚠️ off by ${diff_info['diff']:+,.2f}"
+                        else:
+                            diff_display = f"⚠️ off by {diff_info['diff']:+d}"
+                        rows.append(
+                            {
+                                "Field": key.title(),
+                                "Source (statement summary)": rep_display,
+                                "Detailed rows (computed)": comp_display,
+                                "Status": diff_display,
+                            }
+                        )
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                    st.caption(
+                        "The whole statement is flagged for review. Re-check the detailed rows "
+                        "against the bank statement (or re-run Grok) before proceeding."
                     )
-                if rows:
-                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-                st.caption(
-                    "The whole statement is flagged for review. Re-check the detailed rows "
-                    "against the bank statement (or re-run Grok) before proceeding."
+                log_event(
+                    LOGGER,
+                    "bank_stmt_reconciliation_mismatch",
+                    client=selected_client,
+                    differences=", ".join(sorted((recon.get("differences") or {}).keys())),
                 )
-            log_event(
-                LOGGER,
-                "bank_stmt_reconciliation_mismatch",
-                client=selected_client,
-                differences=", ".join(sorted((recon.get("differences") or {}).keys())),
-            )
         else:
-            st.caption(
-                "ℹ️ No source TOTALS line available — reconciliation cross-check skipped "
-                "(Azure run without TOTALS metadata, or older Grok CSV)."
+            st.info(
+                "ℹ️ No source TOTALS line or Statement Summary available — reconciliation "
+                "cross-check skipped (Azure run without summary metadata, or older Grok CSV)."
             )
 
         st.subheader("Transactions (review & edit)")
@@ -2459,6 +2466,7 @@ def _run_bank_statement_azure_process(
                         int(len(df)) if df is not None and not df.empty else 0
                     ),
                     "grok_totals": meta_ocr.get("grok_totals"),
+                    "statement_summary": meta_ocr.get("statement_summary"),
                     "azure_ocr_meta": meta_ocr,
                 }
                 if meta_ocr.get("grok_totals"):
@@ -2549,6 +2557,10 @@ def _run_bank_statement_azure_process(
             st.session_state["bank_stmt_rules_info"] = rules_info
             # Azure OCR may return grok_totals for reconciliation; Grok CSV paste supplies its own.
             st.session_state["bank_stmt_grok_totals"] = last_grok_totals
+            st.session_state["bank_stmt_statement_summary"] = (
+                last_meta.get("statement_summary")
+                or (last_meta.get("azure_ocr_meta") or {}).get("statement_summary")
+            )
             st.session_state["bank_stmt_last_mode"] = run_mode
             st.session_state["bank_stmt_azure_ocr_meta"] = (
                 last_meta.get("azure_ocr_meta") if isinstance(last_meta, dict) else None
