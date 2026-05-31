@@ -42,7 +42,7 @@ python Scripts/health_check.py --full
 
 ## Current Status (June 2026 — v2.45.3)
 
-- **Laura/Stef pilot active (Path A)**; Gate A3 HCC PASS; **Auto Body withdrawal residual OPEN** (Δ $273.45 vs gold — see re-smoke run file below).
+- **Laura/Stef pilot active (Path A)**; Gate A3 HCC PASS; **Auto Body withdrawal fix v2.45.4** (dedupe RCA — production re-smoke pending; see `QMS/State-Alignment/runs/2026-05-31-v2454-auto-body-dedupe-fix.md`).
 - **Deploy discipline:** after every `Deploy-ToAzure.ps1`, run Gate A3 headless smoke + evidence collection — see [`docs/deployment.md`](docs/deployment.md) (or `-RunGateA3Smoke`).
 - **v2.45.3 deploy** (`1dfb6b3f`): v2.45.2 tightening live on Azure; re-smoke evidence in [`QMS/State-Alignment/runs/2026-05-31-v2453-deploy-resmoke.md`](QMS/State-Alignment/runs/2026-05-31-v2453-deploy-resmoke.md).
 

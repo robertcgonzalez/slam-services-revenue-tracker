@@ -2757,18 +2757,40 @@ def _prune_register_for_supplemental(
     return [row for idx, row in enumerate(register_txns) if idx not in prune_indices]
 
 
-def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop obvious duplicates when register rows and check-derived rows overlap."""
+def _supplemental_row_dedupe_key(row: pd.Series) -> tuple[float, str]:
+    """Amount + payee/description — distinct vendors may share the same check amount."""
 
+    payee = str(row.get("Payee") or row.get("Description") or "").strip().lower()[:40]
+    try:
+        amt = round(float(row.get("_abs_amt") or 0.0), 2)
+    except (TypeError, ValueError):
+        amt = 0.0
+    return (amt, payee)
+
+
+def _dedupe_azure_transactions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Drop obvious duplicates when register rows and check-derived rows overlap.
+
+    Cross-source amount matching uses **register debits only** (not deposits/credits)
+    so a supplemental check is not dropped when a register deposit happens to share
+    the same dollar amount (Gate A3 Auto Body Δ $273.45 residual).
+    """
+
+    stats = {
+        "dedupe_dropped_register_debit_match": 0,
+        "dedupe_dropped_supplemental_dup": 0,
+    }
     if df is None or df.empty:
-        return df
+        return df, stats
     work = df.copy()
     amount_col = "SignedAmount" if "SignedAmount" in work.columns else "Amount"
+    signed: pd.Series | None = None
     if amount_col in work.columns:
-        work["_abs_amt"] = pd.to_numeric(
+        signed = pd.to_numeric(
             work[amount_col].astype(str).str.replace(",", "", regex=False),
             errors="coerce",
-        ).abs()
+        )
+        work["_abs_amt"] = signed.abs()
 
     if "Check#" in work.columns:
         work["_chk"] = work["Check#"].astype(str).str.strip()
@@ -2777,10 +2799,15 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
         without_chk = work[~has_chk]
         work = pd.concat([with_chk, without_chk], ignore_index=True)
 
-    # Drop supplemental amount-only rows when register already has the same withdrawal.
+    # Drop supplemental amount-only rows when register already has the same debit.
     if "Source" in work.columns and "_abs_amt" in work.columns and "Check#" in work.columns:
         no_chk = work["Check#"].astype(str).str.strip() == ""
-        reg_amts = work.loc[work["Source"] == "register", "_abs_amt"].dropna().tolist()
+        reg_mask = work["Source"] == "register"
+        if signed is not None:
+            reg_debit_mask = reg_mask & signed.notna() & (signed < 0)
+        else:
+            reg_debit_mask = reg_mask
+        reg_amts = work.loc[reg_debit_mask, "_abs_amt"].dropna().tolist()
         drop_rows: list[int] = []
         for idx in work.index:
             if not (no_chk.loc[idx] and work.at[idx, "Source"] == "check_image_crop"):
@@ -2791,25 +2818,28 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
             if any(abs(float(amt) - float(r)) <= _AMOUNT_MATCH_TOLERANCE for r in reg_amts):
                 drop_rows.append(idx)
         if drop_rows:
+            stats["dedupe_dropped_register_debit_match"] = len(drop_rows)
             work = work.drop(index=drop_rows)
 
-        # Collapse duplicate amount-only supplemental rows (multi-crop OCR bleed).
-        seen_supp_amts: set[float] = set()
-        drop_rows: list[int] = []
+        # Collapse duplicate amount-only supplemental rows (same payee + amount).
+        seen_supp_keys: set[tuple[float, str]] = set()
+        drop_rows = []
         for idx in work.index:
             if not (no_chk.loc[idx] and work.at[idx, "Source"] == "check_image_crop"):
                 continue
             amt = work.at[idx, "_abs_amt"]
             if pd.isna(amt):
                 continue
-            if amt in seen_supp_amts:
+            key = _supplemental_row_dedupe_key(work.loc[idx])
+            if key in seen_supp_keys and key[0] > 0:
                 drop_rows.append(idx)
             else:
-                seen_supp_amts.add(float(amt))
+                seen_supp_keys.add(key)
         if drop_rows:
+            stats["dedupe_dropped_supplemental_dup"] = len(drop_rows)
             work = work.drop(index=drop_rows)
 
-    return work.drop(columns=["_chk", "_abs_amt"], errors="ignore").reset_index(drop=True)
+    return work.drop(columns=["_chk", "_abs_amt"], errors="ignore").reset_index(drop=True), stats
 
 
 def _pdf_register_page_text(pdf_bytes: bytes, pages_str: str) -> str:
@@ -3253,7 +3283,26 @@ def _run_azure_ocr_via_document_intelligence(
 
         combined = register_txns + supplemental_check_txns
         df = _parse_ocr_response_to_df({"transactions": combined})
-        df = _dedupe_azure_transactions(df)
+        df, dedupe_stats = _dedupe_azure_transactions(df)
+        meta["dedupe_dropped_register_debit_match"] = int(
+            dedupe_stats.get("dedupe_dropped_register_debit_match") or 0
+        )
+        meta["dedupe_dropped_supplemental_dup"] = int(
+            dedupe_stats.get("dedupe_dropped_supplemental_dup") or 0
+        )
+        if dedupe_stats.get("dedupe_dropped_register_debit_match") or dedupe_stats.get(
+            "dedupe_dropped_supplemental_dup"
+        ):
+            logs.append(
+                _log(
+                    "info",
+                    "Post-assembly dedupe: "
+                    f"{dedupe_stats.get('dedupe_dropped_register_debit_match', 0)} supplemental row(s) "
+                    "matched register debits; "
+                    f"{dedupe_stats.get('dedupe_dropped_supplemental_dup', 0)} duplicate supplemental "
+                    "row(s) collapsed.",
+                )
+            )
         meta["transaction_count"] = int(len(df))
         meta["azure_di_meta"] = di_meta
         meta["pages_analyzed"] = pages_str

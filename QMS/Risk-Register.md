@@ -1,6 +1,6 @@
 # Risk & Opportunity Register (Living)
 
-**Last Reviewed**: 2026-05-31 (v2.45.1 — post-deploy smoke gate + QMS closure)  
+**Last Reviewed**: 2026-05-31 (v2.45.4 — Auto Body dedupe RCA)  
 **Review Cadence**: Every Management Review + after any major spike or incident
 
 **Instructions**: Add new rows as risks are identified. Update status / mitigation as actions are taken. High and Medium items must be discussed in every Management Review and State Alignment run.
@@ -19,7 +19,7 @@
 | R-006 | Git + memorialization discipline lapsed in practice — substantial v2.44.19–20 work existed uncommitted | Low | High | Robert + agents | Session Close checklist + `Invoke-GitVerification.ps1`; Gate A3 on `origin/main`; **mandatory post-deploy smoke** in `docs/deployment.md` + `Deploy-ToAzure.ps1 -RunGateA3Smoke` (v2.45.1). | 2026-05-31 | Memorialization Enforcement |
 | R-007 | QMS activation incomplete — feedback loop, State Alignment runs, and O-002 visibility delayed | Low | Medium | Robert | O-002 shipped; feedback_log seeded; State Alignment runs active; **post-incident Management Review closed** 2026-05-31. | 2026-05-31 | QMS Activation |
 | R-008 | Dual-agent orchestrator now a production operational dependency for complex Azure recovery | Low | Medium | Robert | `docs/handoffs/` pattern + `Invoke-DualAgentHandoff.ps1`; document in deployment runbook; do not over-rely without human verification. | 2026-05-29 | Procedure / tooling |
-| R-009 | Laura/Stef pilot adoption stalls — insufficient real `feedback_log.csv` volume or recurring P0 blockers | Low | High | Robert / Laura | Gate A3 PASS; payee rules active on Azure (`payee_rules_applied > 0`); post-deploy smoke gate enforced; sustained pilot + weekly Section 14 triage. | 2026-05-31 | Pilot sustainment |
+| R-009 | Laura/Stef pilot adoption stalls — insufficient real `feedback_log.csv` volume or recurring P0 blockers | Low | High | Robert / Laura | Gate A3 HCC PASS; Auto Body withdrawal dedupe fix v2.45.4 (production re-smoke pending); payee rules active; post-deploy smoke gate enforced. | 2026-05-31 | Pilot sustainment |
 
 ## Closed / Mitigated Risks (recent)
 

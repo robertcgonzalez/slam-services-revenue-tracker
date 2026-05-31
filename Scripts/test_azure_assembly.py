@@ -373,7 +373,7 @@ def test_auto_body_withdrawal_residual_scenario() -> None:
     for row in supplemental:
         row["Source"] = "check_image_crop"
     df = bs._parse_ocr_response_to_df({"transactions": register_kept + supplemental})
-    df = bs._dedupe_azure_transactions(df)
+    df, _ = bs._dedupe_azure_transactions(df)
     metrics = bs.transaction_summary_metrics(df)
     assert len(df) >= 85
     assert abs(float(metrics["withdrawals"]) - 41403.63) <= 100.0
@@ -446,15 +446,129 @@ def test_payee_rules_fire_on_sample_descriptions(tmp_path) -> None:
 def test_dedupe_azure_transactions_collapses_supplemental_amount_dupes() -> None:
     df = pd.DataFrame(
         [
-            {"Check#": "", "SignedAmount": "-250.00", "Source": "check_image_crop"},
-            {"Check#": "", "SignedAmount": "-250.00", "Source": "check_image_crop"},
-            {"Check#": "", "SignedAmount": "-999.00", "Source": "check_image_crop"},
+            {
+                "Check#": "",
+                "SignedAmount": "-250.00",
+                "Source": "check_image_crop",
+                "Description": "Vendor A",
+            },
+            {
+                "Check#": "",
+                "SignedAmount": "-250.00",
+                "Source": "check_image_crop",
+                "Description": "Vendor A",
+            },
+            {
+                "Check#": "",
+                "SignedAmount": "-999.00",
+                "Source": "check_image_crop",
+                "Description": "Vendor B",
+            },
         ]
     )
-    out = bs._dedupe_azure_transactions(df)
+    out, stats = bs._dedupe_azure_transactions(df)
     assert len(out) == 2
+    assert stats["dedupe_dropped_supplemental_dup"] == 1
     amounts = sorted(abs(float(x)) for x in out["SignedAmount"])
     assert amounts == [250.0, 999.0]
+
+
+def test_dedupe_keeps_distinct_supplemental_same_amount_different_payee() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "Check#": "",
+                "SignedAmount": "-150.00",
+                "Source": "check_image_crop",
+                "Description": "Payee One",
+            },
+            {
+                "Check#": "",
+                "SignedAmount": "-150.00",
+                "Source": "check_image_crop",
+                "Description": "Payee Two",
+            },
+        ]
+    )
+    out, stats = bs._dedupe_azure_transactions(df)
+    assert len(out) == 2
+    assert stats["dedupe_dropped_supplemental_dup"] == 0
+
+
+def test_dedupe_preserves_supplemental_when_only_register_deposit_matches() -> None:
+    """Gate A3 Auto Body: deposit register line must not suppress imaging-leg check."""
+
+    df = pd.DataFrame(
+        [
+            {
+                "Check#": "",
+                "SignedAmount": "273.45",
+                "Source": "register",
+                "Description": "Deposit misc",
+            },
+            {
+                "Check#": "",
+                "SignedAmount": "-273.45",
+                "Source": "check_image_crop",
+                "Description": "Vendor check imaging",
+            },
+        ]
+    )
+    out, stats = bs._dedupe_azure_transactions(df)
+    assert len(out) == 2
+    assert stats["dedupe_dropped_register_debit_match"] == 0
+    metrics = bs.transaction_summary_metrics(out)
+    assert abs(float(metrics["withdrawals"]) - 273.45) < 0.02
+
+
+def test_auto_body_273_gap_regression_assembly() -> None:
+    """Production Δ $273.45: register deposit colliding with imaging check amount."""
+
+    register = [
+        {
+            "Date": "2026-01-15",
+            "Description": "Deposit collision",
+            "Payee": "",
+            "Amount": "273.45",
+            "Check#": "",
+            "SignedAmount": "273.45",
+            "Category": "Uncategorized",
+        },
+        *[_register_row(f"Tabular {i}", 100.0 + i) for i in range(43)],
+    ]
+    supplemental = [_check_row("Imaging vendor", 273.45)] + [
+        _check_row(f"Imaging check {i}", 500.0 + i) for i in range(49)
+    ]
+
+    supplemental_filtered, stats, prune_indices = bs._filter_supplemental_check_txns(
+        register, supplemental
+    )
+    assert stats["register_incomplete"] is True
+    assert any(
+        abs(bs._parse_transaction_amount(r) or 0.0) == 273.45 for r in supplemental_filtered
+    )
+
+    register_kept = bs._prune_register_for_supplemental(
+        register,
+        register_incomplete=True,
+        supplemental=supplemental_filtered,
+        prune_indices=prune_indices,
+    )
+    for row in register_kept:
+        row["Source"] = "register"
+    for row in supplemental_filtered:
+        row["Source"] = "check_image_crop"
+
+    pre_metrics = bs.transaction_summary_metrics(
+        bs._parse_ocr_response_to_df({"transactions": register_kept + supplemental_filtered})
+    )
+    df, dedupe_stats = bs._dedupe_azure_transactions(
+        bs._parse_ocr_response_to_df({"transactions": register_kept + supplemental_filtered})
+    )
+    assert dedupe_stats["dedupe_dropped_register_debit_match"] == 0
+    post_metrics = bs.transaction_summary_metrics(df)
+    assert post_metrics["withdrawals"] == pre_metrics["withdrawals"]
+    assert float(post_metrics["withdrawals"]) >= 273.45
 
 
 def main() -> int:
@@ -478,6 +592,9 @@ def main() -> int:
     test_reconciliation_reference_from_statement_summary()
     test_iqr_outlier_rejects_memo_bleed_not_valid_checks()
     test_dedupe_azure_transactions_collapses_supplemental_amount_dupes()
+    test_dedupe_keeps_distinct_supplemental_same_amount_different_payee()
+    test_dedupe_preserves_supplemental_when_only_register_deposit_matches()
+    test_auto_body_273_gap_regression_assembly()
     with tempfile.TemporaryDirectory() as tmp:
         _run_payee_rules_sample_test(Path(tmp) / "payee_rules.csv")
     print("\n[OK] All Azure assembly regression checks passed.")
