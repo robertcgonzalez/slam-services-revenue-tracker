@@ -200,7 +200,7 @@ from diagnostics import (
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.45.6"
+APP_VERSION = "v2.45.7"
 LOGGER = setup_app_logging()
 
 SLAM_CSS = """
@@ -215,84 +215,111 @@ SLAM_CSS = """
         margin-bottom: 1rem;
     }
     .slam-dashboard-hero {
-        background: linear-gradient(135deg, #f0f7ff 0%, #f8fafc 100%);
-        border: 1px solid #cbd5e1;
-        border-left: 5px solid #1e3a5f;
-        padding: 1.25rem 1.5rem;
-        border-radius: 10px;
-        margin-bottom: 1.25rem;
-        box-shadow: 0 1px 4px rgba(30, 58, 95, 0.06);
+        background: linear-gradient(135deg, #fff7ed 0%, #fef9c3 45%, #f8fafc 100%);
+        border: 1px solid #fed7aa;
+        border-left: 5px solid #ea580c;
+        padding: 1.5rem 1.75rem;
+        border-radius: 12px;
+        margin-bottom: 1.75rem;
+        box-shadow: 0 2px 8px rgba(234, 88, 12, 0.08);
     }
     .slam-dashboard-greeting {
         margin: 0;
-        color: #1e3a5f;
-        font-size: 1.75rem;
+        color: #9a3412;
+        font-size: 1.85rem;
         font-weight: 700;
-        line-height: 1.25;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
     }
     .slam-dashboard-date {
-        margin: 0.4rem 0 0;
-        color: #5a6c7d;
+        margin: 0.5rem 0 0;
+        color: #78716c;
         font-size: 0.95rem;
+        font-weight: 500;
     }
     .slam-section-header {
         color: #1e3a5f;
         font-size: 1.05rem;
         font-weight: 600;
-        margin: 0 0 0.75rem 0;
-        padding-bottom: 0.35rem;
+        margin: 0 0 0.85rem 0;
+        padding-bottom: 0.4rem;
         border-bottom: 1px solid #e2e8f0;
+    }
+    .slam-main-card {
+        margin-bottom: 1.5rem;
     }
     .slam-priority-hero {
         background: linear-gradient(135deg, #fff1f2 0%, #fff8e6 100%);
         border: 2px solid #dc2626;
         border-left: 6px solid #dc2626;
-        padding: 1.15rem 1.35rem;
-        border-radius: 10px;
-        margin: 0.5rem 0 1.25rem 0;
-        box-shadow: 0 3px 12px rgba(220, 38, 38, 0.14);
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        margin: 0 0 1.5rem 0;
+        box-shadow: 0 3px 12px rgba(220, 38, 38, 0.12);
     }
     .slam-priority-hero h4 {
-        margin: 0 0 0.4rem 0;
+        margin: 0 0 0.45rem 0;
         color: #991b1b;
-        font-size: 1.2rem;
+        font-size: 1.25rem;
         font-weight: 700;
     }
-    .slam-priority-hero p { margin: 0; color: #7f1d1d; font-size: 0.95rem; line-height: 1.45; }
+    .slam-priority-hero p { margin: 0; color: #7f1d1d; font-size: 0.95rem; line-height: 1.5; }
     .slam-priority-caught-up {
         background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
         border: 2px solid #059669;
         border-left: 6px solid #059669;
-        padding: 1.15rem 1.35rem;
-        border-radius: 10px;
-        margin: 0.5rem 0 1.25rem 0;
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        margin: 0 0 1.5rem 0;
         box-shadow: 0 2px 8px rgba(5, 150, 105, 0.1);
     }
-    .slam-priority-caught-up strong { color: #065f46; font-size: 1.05rem; }
+    .slam-priority-caught-up strong { color: #065f46; font-size: 1.1rem; }
     div[data-testid="stMetric"] {
-        background: #f8fafc;
-        padding: 0.65rem 0.75rem;
-        border-radius: 8px;
+        background: #ffffff;
+        padding: 0.75rem 0.85rem;
+        border-radius: 10px;
         border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
     }
-    .slam-sidebar-user {
-        background: #f8fafc;
+    .slam-sidebar-compact {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
         border: 1px solid #e2e8f0;
         border-radius: 8px;
-        padding: 0.65rem 0.85rem;
-        margin-bottom: 0.5rem;
+        padding: 0.45rem 0.65rem;
+        margin-bottom: 0.65rem;
     }
-    .slam-sidebar-user-name {
+    .slam-sidebar-compact-name {
         color: #1e3a5f;
-        font-size: 0.95rem;
-        font-weight: 600;
-        margin: 0;
+        font-size: 0.88rem;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
-    .slam-sidebar-status {
+    .slam-sidebar-compact-meta {
         color: #64748b;
-        font-size: 0.82rem;
-        margin: 0.25rem 0 0;
-        line-height: 1.4;
+        font-size: 0.75rem;
+        font-weight: 500;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    .slam-sidebar-compact-meta .warn { color: #dc2626; font-weight: 600; }
+    .slam-sidebar-compact-meta .ok { color: #059669; }
+    .slam-sidebar-section-label {
+        color: #64748b;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0.75rem 0 0.35rem;
+    }
+    .slam-sidebar-actions-wrap {
+        margin-top: 0.5rem;
+        padding-top: 0.25rem;
     }
     .slam-login-header {
         text-align: center;
@@ -325,9 +352,16 @@ SLAM_CSS = """
         border-radius: 6px;
         border-left: 3px solid #1e3a5f;
     }
+    section[data-testid="stSidebar"] .stExpander {
+        margin-bottom: 0.35rem;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
+        gap: 0.35rem;
+    }
     @media (max-width: 768px) {
-        .slam-dashboard-greeting { font-size: 1.4rem; }
-        .slam-dashboard-hero { padding: 1rem; }
+        .slam-dashboard-greeting { font-size: 1.45rem; }
+        .slam-dashboard-hero { padding: 1.15rem 1.25rem; margin-bottom: 1.25rem; }
+        .slam-priority-hero, .slam-priority-caught-up { padding: 1rem 1.15rem; }
     }
 </style>
 """
@@ -478,65 +512,86 @@ else:
         DB_STATUS_DETAIL = f"{exc} · CSV: `{DATA_PATH}`"
 
 
-def render_data_source_status(client_count: int = 0, request_count: int = 0) -> None:
-    """Sidebar indicator — CSV vs PostgreSQL, connection health, recovery tips."""
-    with st.sidebar.expander("📊 Data Source Status", expanded=DB_HEALTH != "ok"):
-        if DATA_SOURCE == "postgresql" and DB_HEALTH == "ok":
-            st.success(f"✅ {DB_STATUS_TITLE} — connected")
-            st.caption("Edits save directly to the database.")
-            if client_count or request_count:
-                st.metric("Loaded records", f"{client_count} clients · {request_count} requests")
-        elif DB_HEALTH == "warn":
-            st.warning(f"⚠️ {DB_STATUS_TITLE}")
-            st.caption(DB_STATUS_DETAIL)
-            if client_count or request_count:
-                st.caption(f"Showing {client_count} clients · {request_count} requests from CSV.")
-        elif DB_HEALTH == "error":
-            st.error(f"❌ {DB_STATUS_TITLE}")
-            st.caption(DB_STATUS_DETAIL)
-        else:
-            st.info(f"📁 {DB_STATUS_TITLE}")
-            st.caption(DB_STATUS_DETAIL)
-            if client_count or request_count:
-                st.caption(f"{client_count} clients · {request_count} requests loaded.")
+def _render_data_source_body(client_count: int = 0, request_count: int = 0) -> None:
+    """Inner body for combined data & freshness expander."""
+    if DATA_SOURCE == "postgresql" and DB_HEALTH == "ok":
+        st.success(f"✅ {DB_STATUS_TITLE} — connected")
+        st.caption("Edits save directly to the database.")
+        if client_count or request_count:
+            st.caption(f"{client_count} clients · {request_count} requests loaded")
+    elif DB_HEALTH == "warn":
+        st.warning(f"⚠️ {DB_STATUS_TITLE}")
+        st.caption(DB_STATUS_DETAIL)
+        if client_count or request_count:
+            st.caption(f"Showing {client_count} clients · {request_count} requests from CSV.")
+    elif DB_HEALTH == "error":
+        st.error(f"❌ {DB_STATUS_TITLE}")
+        st.caption(DB_STATUS_DETAIL)
+    else:
+        st.info(f"📁 {DB_STATUS_TITLE}")
+        st.caption(DB_STATUS_DETAIL)
+        if client_count or request_count:
+            st.caption(f"{client_count} clients · {request_count} requests loaded.")
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button(
-                "🔍 Test connection",
-                key="btn_test_db",
-                disabled=not POSTGRES_REQUESTED,
-                use_container_width=True,
-            ):
-                try:
-                    from db_utils import get_connection_status
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button(
+            "🔍 Test connection",
+            key="btn_test_db",
+            disabled=not POSTGRES_REQUESTED,
+            use_container_width=True,
+        ):
+            try:
+                from db_utils import get_connection_status
 
-                    result = get_connection_status(reset=True)
-                    if result["connected"]:
-                        stats = result.get("stats") or {}
-                        st.success(
-                            f"{result['message']} "
-                            f"({stats.get('clients', 0)} clients, "
-                            f"{stats.get('requests', 0)} requests in DB)"
-                        )
-                    else:
-                        st.error(result["message"])
-                except Exception as exc:
-                    st.error(f"Connection test failed: {exc}")
-        with col_b:
-            if st.button("🔄 Refresh status", key="btn_refresh_status", use_container_width=True):
-                st.cache_data.clear()
-                st.rerun()
+                result = get_connection_status(reset=True)
+                if result["connected"]:
+                    stats = result.get("stats") or {}
+                    st.success(
+                        f"{result['message']} "
+                        f"({stats.get('clients', 0)} clients, "
+                        f"{stats.get('requests', 0)} requests in DB)"
+                    )
+                else:
+                    st.error(result["message"])
+            except Exception as exc:
+                st.error(f"Connection test failed: {exc}")
+    with col_b:
+        if st.button("🔄 Refresh status", key="btn_refresh_status", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
-        if POSTGRES_REQUESTED and DB_HEALTH == "warn":
-            with st.expander("Recovery options", expanded=False):
-                st.markdown(
-                    "**If saves aren't working:**\n"
-                    "1. Wait 30 seconds and click **Test connection**\n"
-                    "2. Ask Robert to check Azure firewall + App Settings\n"
-                    "3. **Temporary CSV fallback:** set `USE_POSTGRES=false` in Azure "
-                    "(edits save to CSV until Postgres is fixed)"
+    if POSTGRES_REQUESTED and DB_HEALTH == "warn":
+        with st.expander("Recovery options", expanded=False):
+            st.markdown(
+                "**If saves aren't working:**\n"
+                "1. Wait 30 seconds and click **Test connection**\n"
+                "2. Ask Robert to check Azure firewall + App Settings\n"
+                "3. **Temporary CSV fallback:** set `USE_POSTGRES=false` in Azure "
+                "(edits save to CSV until Postgres is fixed)"
+            )
+
+
+def render_sidebar_data_health(client_count: int = 0, request_count: int = 0) -> None:
+    """Combined data source + freshness — auto-expand on warn/error or stale data."""
+    freshness = get_data_freshness(data_source=DATA_SOURCE, data_path=DATA_PATH)
+    expand = DB_HEALTH != "ok" or not freshness.get("available")
+    with st.sidebar.expander("📊 Data & freshness", expanded=expand):
+        _render_data_source_body(client_count, request_count)
+        st.markdown("---")
+        if freshness.get("available"):
+            if DATA_SOURCE == "postgresql":
+                st.write(f"**{freshness.get('label')}** — {freshness.get('message', '')}")
+                st.caption(
+                    f"{freshness.get('clients', 0)} clients · "
+                    f"{freshness.get('requests', 0)} requests in database"
                 )
+            else:
+                st.write(f"**Last CSV update:** {freshness.get('last_updated', '—')}")
+                st.caption(f"Requests: {freshness.get('requests_updated', '—')}")
+                st.caption(f"Clients: {freshness.get('clients_updated', '—')}")
+        else:
+            st.warning(freshness.get("message", "Data freshness unavailable"))
 
 
 # --- Data loading helpers (cached) ---
@@ -762,18 +817,8 @@ def _editor_has_unsaved_changes(edited: pd.DataFrame, original: pd.DataFrame) ->
 
 # --- Global filters in sidebar (propagate across pages) ---
 def render_global_filters(req_df):
-    st.sidebar.title("🔎 Global Filters")
+    st.sidebar.markdown('<p class="slam-sidebar-section-label">Filters</p>', unsafe_allow_html=True)
 
-    overdue_count = int(
-        (
-            (req_df["status"].isin(["Pending", "Received"]))
-            & (pd.to_datetime(req_df["due_date"], errors="coerce") < datetime.now())
-        ).sum()
-    )
-    if overdue_count:
-        st.sidebar.caption(f"⚠️ {overdue_count} overdue item(s) need attention")
-
-    st.sidebar.markdown("**Quick views**")
     preset = st.session_state.get("filter_preset")
     c1, c2 = st.sidebar.columns(2)
     with c1:
@@ -797,8 +842,8 @@ def render_global_filters(req_df):
     doc_counts = missing_document_counts(req_df)
     if doc_counts["missing_either"]:
         st.sidebar.caption(
-            f"📄 Missing docs (Pending/Received): **{doc_counts['missing_bank']}** bank stmt · "
-            f"**{doc_counts['missing_sales']}** sales rpt · "
+            f"📄 Missing docs: **{doc_counts['missing_bank']}** bank · "
+            f"**{doc_counts['missing_sales']}** sales · "
             f"**{doc_counts['missing_both']}** both"
         )
 
@@ -809,7 +854,7 @@ def render_global_filters(req_df):
         "missing_docs": "requests **missing bank statement and/or sales report**",
     }
     if preset in preset_labels:
-        st.sidebar.info(f"Showing {preset_labels[preset]} only. Reset filters to see everything.")
+        st.sidebar.info(f"Showing {preset_labels[preset]} only.")
         if preset == "missing_docs":
             st.sidebar.caption(
                 f"Bank stmt only: {doc_counts['missing_bank']} · "
@@ -831,39 +876,47 @@ def render_global_filters(req_df):
     if overdue_only:
         default_status = ["Pending", "Received"]
 
-    date_range = st.sidebar.date_input(
-        "Due date range",
-        value=(min_d.date(), max_d.date()),
-        min_value=min_d.date(),
-        max_value=max_d.date(),
-        disabled=preset_locked,
-    )
-    sel_status = st.sidebar.multiselect(
-        "Status", all_status, default=default_status, disabled=preset_locked
-    )
-
     base_types = req_df["request_type"].dropna().unique().tolist() if len(req_df) else []
     extra_types = ["Payroll", "Tax prep"]
     all_types = sorted(set(base_types) | set(extra_types))
-    sel_type = st.sidebar.multiselect(
-        "Request Type", all_types, default=all_types, disabled=preset_locked
-    )
 
-    all_ind = ["All", "Restaurant/Bar", "Construction/Trades", "Other"]
-    sel_ind = st.sidebar.selectbox("Industry Segment", all_ind, index=0, disabled=preset_locked)
+    expand_fine_tune = preset is not None
 
-    if st.sidebar.button("Reset Filters", key="btn_reset_filters"):
-        for k in list(st.session_state.keys()):
-            if k.startswith(
-                ("filter_", "revenue_editor", "last_filter_industry", "widget_", "filter_preset")
-            ):
-                try:
-                    del st.session_state[k]
-                except Exception:
-                    pass
-        st.session_state.pop("filter_preset", None)
-        st.cache_data.clear()
-        st.rerun()
+    with st.sidebar.expander("Fine-tune filters", expanded=expand_fine_tune):
+        date_range = st.date_input(
+            "Due date range",
+            value=(min_d.date(), max_d.date()),
+            min_value=min_d.date(),
+            max_value=max_d.date(),
+            disabled=preset_locked,
+        )
+        sel_status = st.multiselect(
+            "Status", all_status, default=default_status, disabled=preset_locked
+        )
+        sel_type = st.multiselect(
+            "Request Type", all_types, default=all_types, disabled=preset_locked
+        )
+        all_ind = ["All", "Restaurant/Bar", "Construction/Trades", "Other"]
+        sel_ind = st.selectbox("Industry Segment", all_ind, index=0, disabled=preset_locked)
+
+        if st.button("Reset filters", key="btn_reset_filters", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                if k.startswith(
+                    (
+                        "filter_",
+                        "revenue_editor",
+                        "last_filter_industry",
+                        "widget_",
+                        "filter_preset",
+                    )
+                ):
+                    try:
+                        del st.session_state[k]
+                    except Exception:
+                        pass
+            st.session_state.pop("filter_preset", None)
+            st.cache_data.clear()
+            st.rerun()
 
     return {
         "date_range": date_range,
@@ -1034,7 +1087,6 @@ def get_all_overdue(req_df: pd.DataFrame) -> pd.DataFrame:
 
 def render_todays_priority(req_df: pd.DataFrame) -> None:
     """Prominent dashboard briefing — always uses full dataset, not sidebar filters."""
-    st.caption("**Today's priority** — full overdue list (not affected by sidebar filters).")
     overdue = get_all_overdue(req_df)
 
     if overdue.empty:
@@ -1150,27 +1202,43 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
         full_doc = missing_document_counts(req_df)
         if full_doc["missing_either"]:
             st.caption(
-                f"**Missing documents** (all active requests): "
-                f"{full_doc['missing_bank']} need bank statement · "
-                f"{full_doc['missing_sales']} need sales report · "
-                f"{full_doc['missing_both']} need both. "
-                "Use **Bank Statements** page to process PDFs, then **Mark as Received**."
+                f"Missing documents: {full_doc['missing_bank']} bank stmt · "
+                f"{full_doc['missing_sales']} sales rpt · "
+                f"{full_doc['missing_both']} both — use **Bank Statements** to process PDFs."
             )
 
-    with st.container(border=True):
-        st.markdown('<p class="slam-section-header">Status breakdown</p>', unsafe_allow_html=True)
-        status_counts = filtered["status"].value_counts().reset_index()
-        status_counts.columns = ["status", "count"]
-        st.bar_chart(status_counts, x="status", y="count")
+    c_chart, c_recent = st.columns([3, 2])
+    with c_chart:
+        with st.container(border=True):
+            st.markdown(
+                '<p class="slam-section-header">Status breakdown</p>', unsafe_allow_html=True
+            )
+            status_counts = filtered["status"].value_counts().reset_index()
+            status_counts.columns = ["status", "count"]
+            st.bar_chart(status_counts, x="status", y="count")
+
+    with c_recent:
+        with st.container(border=True):
+            st.markdown(
+                '<p class="slam-section-header">Recent activity</p>',
+                unsafe_allow_html=True,
+            )
+            recent = filtered.sort_values("due_date", ascending=False).head(8)
+            st.dataframe(
+                recent[["business_name", "request_type", "status", "amount_due", "due_date"]],
+                width="stretch",
+                hide_index=True,
+                height=280,
+            )
 
     show_filtered_overdue = filters is not None and not filters_at_default(filters, req_df)
     if show_filtered_overdue:
         with st.container(border=True):
             st.markdown(
-                '<p class="slam-section-header">Overdue requests — action required</p>',
+                '<p class="slam-section-header">Filtered overdue</p>',
                 unsafe_allow_html=True,
             )
-            st.caption("Overdue items matching your current sidebar filters.")
+            st.caption("Items matching your current sidebar filters.")
             overdue = filtered[filtered.get("overdue", False)]
             if not overdue.empty:
                 overdue_display = overdue.copy()
@@ -1189,19 +1257,6 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
                 st.dataframe(overdue_display[cols], width="stretch", hide_index=True)
             else:
                 st.success("No overdue items in current filter.")
-
-    with st.container(border=True):
-        st.markdown(
-            '<p class="slam-section-header">Recent activity</p>',
-            unsafe_allow_html=True,
-        )
-        st.caption("Last 10 records under current filters (by due date).")
-        recent = filtered.sort_values("due_date", ascending=False).head(10)
-        st.dataframe(
-            recent[["business_name", "request_type", "period", "status", "amount_due", "due_date"]],
-            width="stretch",
-            hide_index=True,
-        )
 
 
 # --- Clients page with revenue aggregates + enriched info ---
@@ -2841,20 +2896,18 @@ def _sidebar_overdue_count(req_df: pd.DataFrame) -> int:
 
 
 def render_sidebar_header(req_df: pd.DataFrame) -> None:
-    """Top sidebar: signed-in user and one-line operational status."""
+    """Top sidebar: compact signed-in user + one-line operational status."""
     user = get_app_user()
-    mode_label = "PostgreSQL" if DATA_SOURCE == "postgresql" else "CSV"
-    mode_icon = "🗄️" if DATA_SOURCE == "postgresql" else "📁"
+    mode_short = "PostgreSQL" if DATA_SOURCE == "postgresql" else "CSV"
     overdue = _sidebar_overdue_count(req_df)
-    status_bits = [f"{mode_icon} {mode_label}"]
     if overdue:
-        status_bits.append(f"⚠️ {overdue} overdue")
+        meta_html = f'{mode_short} · <span class="warn">{overdue} overdue</span>'
     else:
-        status_bits.append("✅ No overdue items")
+        meta_html = f'{mode_short} · <span class="ok">All clear</span>'
     st.sidebar.markdown(
-        f'<div class="slam-sidebar-user">'
-        f'<p class="slam-sidebar-user-name">Signed in as {user}</p>'
-        f'<p class="slam-sidebar-status">{" · ".join(status_bits)}</p>'
+        f'<div class="slam-sidebar-compact">'
+        f'<span class="slam-sidebar-compact-name">{user}</span>'
+        f'<span class="slam-sidebar-compact-meta">{meta_html}</span>'
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -2862,68 +2915,45 @@ def render_sidebar_header(req_df: pd.DataFrame) -> None:
         st.sidebar.success(st.session_state["last_save_message"])
 
 
-def render_sidebar_freshness() -> None:
-    """Data freshness expander — auto-open when unavailable or DB degraded."""
-    freshness = get_data_freshness(data_source=DATA_SOURCE, data_path=DATA_PATH)
-    expand_freshness = not freshness.get("available") or DB_HEALTH != "ok"
-    with st.sidebar.expander("📅 Data freshness", expanded=expand_freshness):
-        if freshness.get("available"):
-            if DATA_SOURCE == "postgresql":
-                st.write(f"**{freshness.get('label')}** — {freshness.get('message', '')}")
-                st.caption(
-                    f"{freshness.get('clients', 0)} clients · "
-                    f"{freshness.get('requests', 0)} requests in database"
-                )
-            else:
-                st.write(f"**Last CSV update:** {freshness.get('last_updated', '—')}")
-                st.caption(f"Requests file: {freshness.get('requests_updated', '—')}")
-                st.caption(f"Clients file: {freshness.get('clients_updated', '—')}")
-        else:
-            st.warning(freshness.get("message", "Data freshness unavailable"))
-
-
-def render_sidebar_help() -> None:
-    """Collapsed daily workflow + UAT checklist."""
-    with st.sidebar.expander("❓ Daily workflow help", expanded=False):
+def render_sidebar_workflow() -> None:
+    """Collapsed daily workflow help + UAT checklist."""
+    with st.sidebar.expander("📋 Daily workflow & UAT", expanded=False):
         st.markdown(
             "**Morning (2 min)**\n"
-            "1. Open **Dashboard** — **Today's priority** (top section, full overdue list — not affected by filters)\n"
-            "2. Use **Open Overdue quick view** or sidebar **Overdue** / **This Month**\n"
-            "3. **Missing Docs** shows bank stmt / sales report gaps (counts in sidebar)\n\n"
+            "1. Check **Today's priority** on Dashboard (full overdue list)\n"
+            "2. Use quick views: **Overdue**, **This Month**, **Missing Docs**\n\n"
             "**During the day**\n"
-            "4. **Bank Statements** — upload PDF → **Process Statement** → **Mark as Received**\n"
-            "5. **Revenue Requests** — update Status, checkboxes, notes\n"
-            "6. Watch for the **unsaved changes** warning — click **Save** when ready\n"
-            "7. Use **Undo Last Change** if you made a mistake\n\n"
+            "3. **Bank Statements** — upload PDF → Process → Mark as Received\n"
+            "4. **Revenue Requests** — update status, checkboxes, notes → **Save**\n"
+            "5. **Undo Last Change** if needed\n\n"
             "**End of day**\n"
-            "8. **Force reload data** if Stef edited on another machine (CSV mode)\n"
-            "9. Submit feedback below if something feels wrong"
+            "6. **Force reload data** if Stef edited elsewhere (CSV mode)\n"
+            "7. Submit feedback below if something feels wrong"
         )
-
-    with st.sidebar.expander("📋 UAT checklist (week 1)", expanded=False):
+        st.markdown("---")
+        st.markdown("**UAT checklist (week 1)**")
         st.caption(
-            "Tip: Start on **Dashboard** → **Today's priority**, then sidebar quick views; "
-            "**Save** on Revenue Requests and **Undo** if needed."
+            "Start on Dashboard → Today's priority, then try quick views; "
+            "Save on Revenue Requests and Undo once."
         )
         st.markdown(
-            "- [ ] Log in and confirm your name shows in the sidebar\n"
-            "- [ ] Dashboard loads with client counts (not blank tables)\n"
-            "- [ ] **Today's priority** shows at top (overdue list or **All caught up!**)\n"
-            "- [ ] Try **Overdue** quick view — reset filters after\n"
-            "- [ ] Edit one row on Revenue Requests → **Save** → confirm green message\n"
-            "- [ ] Try **Undo** once to verify it works\n"
-            "- [ ] **Bank Statements** — upload PDF → Process → Mark as Received\n"
-            "- [ ] Submit one test feedback item (sidebar form)\n"
+            "- [ ] Name shows in sidebar header\n"
+            "- [ ] Dashboard loads with metrics (not blank)\n"
+            "- [ ] Today's priority shows overdue list or **All caught up!**\n"
+            "- [ ] Try **Overdue** quick view — reset after\n"
+            "- [ ] Edit + **Save** one row on Revenue Requests\n"
+            "- [ ] Try **Undo** once\n"
+            "- [ ] Bank Statements: upload → Process → Mark as Received\n"
+            "- [ ] Submit one test feedback item\n"
             "- [ ] Tell Robert if anything blocks daily work (P0)"
         )
 
 
-def render_sidebar_system() -> None:
-    """Collapsed system / Azure pipeline diagnostics."""
+def render_sidebar_system_qms() -> None:
+    """Collapsed system diagnostics + QMS baseline."""
     info = get_app_info(app_version=APP_VERSION, data_source=DATA_SOURCE, use_postgres=USE_POSTGRES)
-    with st.sidebar.expander("🔧 System status", expanded=False):
-        st.caption(f"Version **{info['version']}** · Mode: **{info['data_source']}**")
-        st.caption(f"Host: `{info['host']}`")
+    with st.sidebar.expander("⚙️ System & QMS", expanded=False):
+        st.caption(f"Version **{info['version']}** · **{info['data_source']}** · `{info['host']}`")
         if info["custom_password"]:
             st.caption("✅ Production password configured")
         else:
@@ -2933,9 +2963,9 @@ def render_sidebar_system() -> None:
 
         ocr_state = azure_ocr_status()
         if ocr_state["configured"]:
-            st.caption("🤖 Azure Document Intelligence (bank statements): **configured** ✅")
+            st.caption("🤖 Azure Document Intelligence: **configured** ✅")
         else:
-            st.caption("🤖 Azure Document Intelligence (bank statements): **not configured**")
+            st.caption("🤖 Azure Document Intelligence: **not configured**")
             st.caption(f"  ↳ {ocr_state['hint']}")
 
         hybrid_state = hybrid_cv_status()
@@ -2958,15 +2988,12 @@ def render_sidebar_system() -> None:
         for hint in get_operational_hints(data_source=DATA_SOURCE, db_health=DB_HEALTH):
             st.caption(f"• {hint}")
 
-
-def render_sidebar_qms() -> None:
-    """Collapsed QMS baseline summary."""
-    with st.sidebar.expander("📋 QMS status", expanded=False):
+        st.markdown("---")
         qms = get_qms_status(data_path=DATA_PATH)
         if qms["summary"] == "healthy":
-            st.caption("Baseline: **healthy** ✅")
+            st.caption("QMS baseline: **healthy** ✅")
         else:
-            st.caption("Baseline: **watch** ⚠️")
+            st.caption("QMS baseline: **watch** ⚠️")
         if qms["last_state_alignment"]:
             st.caption(f"Last State Alignment: `{qms['last_state_alignment']}`")
         if qms["last_management_review"]:
@@ -2980,10 +3007,10 @@ def render_sidebar_qms() -> None:
 
 
 def render_sidebar_bottom(req_df: pd.DataFrame) -> None:
-    """Bottom sidebar: feedback, exports, reload, logout."""
-    st.sidebar.markdown("---")
+    """Bottom sidebar: feedback, exports, reload, logout — separate actions section."""
+    st.sidebar.markdown('<p class="slam-sidebar-section-label">Actions</p>', unsafe_allow_html=True)
 
-    with st.sidebar.expander("📣 Submit runtime feedback", expanded=False):
+    with st.sidebar.expander("📣 Feedback", expanded=False):
         st.caption("Writes to feedback_log.csv for the next iteration cycle.")
         with st.form("feedback_form", clear_on_submit=True):
             reported_by = st.selectbox("Reported by", ["Laura", "Stef", "Patty", "Robert", "Other"])
@@ -3028,7 +3055,7 @@ def render_sidebar_bottom(req_df: pd.DataFrame) -> None:
                 else:
                     st.warning("Please enter a description before submitting.")
 
-    if st.sidebar.button("📆 Generate monthly revenue summary", use_container_width=True):
+    if st.sidebar.button("📆 Monthly summary", use_container_width=True):
         summary = req_df.copy()
         summary["due_month"] = (
             pd.to_datetime(summary["due_date"], errors="coerce").dt.to_period("M").astype(str)
@@ -3048,7 +3075,7 @@ def render_sidebar_bottom(req_df: pd.DataFrame) -> None:
             use_container_width=True,
         )
 
-    if st.sidebar.button("🔄 Force reload data", use_container_width=True):
+    if st.sidebar.button("🔄 Reload data", use_container_width=True):
         if st.session_state.get("revenue_unsaved"):
             st.sidebar.error(
                 "You have unsaved edits on Revenue Requests. Save or undo before reloading."
@@ -3091,17 +3118,14 @@ def main():
         st.stop()
 
     render_sidebar_header(req_df)
-    render_data_source_status(len(clients_df), len(req_df))
-    render_sidebar_freshness()
+    render_sidebar_data_health(len(clients_df), len(req_df))
 
     filters = render_global_filters(req_df)
     st.session_state["last_filter_industry"] = filters["industry"]
 
     filtered = apply_filters(req_df, clients_df, filters)
 
-    # Page navigation (goto_page set by Today's priority CTAs)
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Navigation**")
+    st.sidebar.markdown('<p class="slam-sidebar-section-label">Pages</p>', unsafe_allow_html=True)
     _nav_pages = ["Dashboard", "Clients", "Revenue Requests", "Bank Statements"]
     if st.session_state.get("goto_page") in _nav_pages:
         st.session_state["nav_page"] = st.session_state.pop("goto_page")
@@ -3109,9 +3133,8 @@ def main():
         st.session_state["nav_page"] = "Dashboard"
     page = st.sidebar.radio("Go to", _nav_pages, key="nav_page", label_visibility="collapsed")
 
-    render_sidebar_help()
-    render_sidebar_system()
-    render_sidebar_qms()
+    render_sidebar_workflow()
+    render_sidebar_system_qms()
 
     if USE_POSTGRES and len(req_df) == 0:
         st.warning(
