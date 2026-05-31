@@ -237,6 +237,49 @@ SLAM_CSS = """
         padding: 0.5rem;
         border-radius: 6px;
     }
+    .slam-login-shell {
+        max-width: 420px;
+        margin: 2.5rem auto 0 auto;
+        padding: 0 1rem;
+    }
+    .slam-login-card {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 2rem 1.75rem 1.25rem;
+        box-shadow: 0 4px 24px rgba(30, 58, 95, 0.08);
+    }
+    .slam-login-header {
+        text-align: center;
+        margin-bottom: 1.25rem;
+    }
+    .slam-login-icon {
+        font-size: 2.5rem;
+        line-height: 1;
+        display: block;
+        margin-bottom: 0.5rem;
+    }
+    .slam-login-header h2 {
+        margin: 0;
+        color: #1e3a5f;
+        font-size: 1.65rem;
+        font-weight: 700;
+    }
+    .slam-login-tagline {
+        color: #5a6c7d;
+        font-size: 0.95rem;
+        margin: 0.35rem 0 0;
+    }
+    .slam-login-note {
+        color: #64748b;
+        font-size: 0.85rem;
+        text-align: center;
+        margin: 0 0 1rem 0;
+        padding: 0.5rem 0.75rem;
+        background: #f1f5f9;
+        border-radius: 6px;
+        border-left: 3px solid #1e3a5f;
+    }
 </style>
 """
 st.markdown(SLAM_CSS, unsafe_allow_html=True)
@@ -249,30 +292,56 @@ DB_HEALTH = "ok"  # ok | warn | error
 DB_STATUS_TITLE = ""
 DB_STATUS_DETAIL = ""
 
-# --- Auth (unchanged contract) ---
+# --- Auth (shared team password; username is personalization only) ---
 HAS_CUSTOM_PASSWORD = "SLAM_APP_PASSWORD" in os.environ
 APP_PASSWORD = os.environ.get("SLAM_APP_PASSWORD", "SLAM2026")
-if not HAS_CUSTOM_PASSWORD:
-    st.warning(
-        "⚠️ Using default password. Set SLAM_APP_PASSWORD App Setting in Azure for production security."
-    )
+LOGIN_USER_CHOICES = ("Laura", "Stef", "Patty", "Robert", "Other")
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "current_user" not in st.session_state:
+    st.session_state.current_user = ""
 
 
 def login():
-    st.title("🔐 SLAM Services Login")
-    st.caption("Revenue Reporting Tracker — secure access for SLAM Services staff.")
-    password = st.text_input("Enter Password", type="password")
-    if st.button("Login", type="primary"):
-        if password == APP_PASSWORD:
-            st.session_state.authenticated = True
-            log_event(LOGGER, "login_success")
-            st.rerun()
+    st.markdown(
+        '<div class="slam-login-shell"><div class="slam-login-card">', unsafe_allow_html=True
+    )
+    st.markdown(
+        """
+        <div class="slam-login-header">
+            <span class="slam-login-icon">📊</span>
+            <h2>SLAM Services</h2>
+            <p class="slam-login-tagline">Revenue Reporting Tracker</p>
+        </div>
+        <p class="slam-login-note">Shared team access — select your name for personalization</p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    selected_user = st.selectbox("Username", LOGIN_USER_CHOICES, index=0)
+    display_user = selected_user
+    if selected_user == "Other":
+        custom_name = st.text_input("Your name", placeholder="Enter your name")
+        display_user = (custom_name or "").strip()
+
+    password = st.text_input("Password", type="password", placeholder="Team password")
+    if not HAS_CUSTOM_PASSWORD:
+        st.caption("⚠️ Default password in use — set **SLAM_APP_PASSWORD** in Azure for production.")
+
+    if st.button("Sign in", type="primary", use_container_width=True):
+        if not display_user:
+            st.error("Please enter your name before signing in.")
+        elif password != APP_PASSWORD:
+            log_event(LOGGER, "login_failed", user=display_user or None)
+            st.error("Incorrect password. Contact Robert if you need a reset.")
         else:
-            log_event(LOGGER, "login_failed")
-            st.error("Incorrect password. Contact Robert if you need the password reset.")
+            st.session_state.authenticated = True
+            st.session_state.current_user = display_user
+            log_event(LOGGER, "login_success", user=display_user)
+            st.rerun()
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 if not st.session_state.authenticated:
@@ -2794,8 +2863,9 @@ def render_sidebar_extras(
             st.caption(f"  ↳ {issue}")
 
     if st.sidebar.button("🚪 Log out", use_container_width=True):
-        log_event(LOGGER, "logout")
+        log_event(LOGGER, "logout", user=get_app_user())
         st.session_state.authenticated = False
+        st.session_state.current_user = ""
         st.session_state.pop("last_save_message", None)
         st.cache_data.clear()
         st.rerun()

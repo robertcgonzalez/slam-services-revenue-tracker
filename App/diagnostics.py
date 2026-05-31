@@ -14,6 +14,15 @@ _QMS_DIR = _REPO_ROOT / "QMS"
 
 
 def get_app_user() -> str:
+    """Display name: session login choice first, then SLAM_APP_USER env, else Team."""
+    try:
+        import streamlit as st
+
+        session_user = (st.session_state.get("current_user") or "").strip()
+        if session_user:
+            return session_user
+    except (ImportError, RuntimeError, AttributeError):
+        pass
     return os.environ.get("SLAM_APP_USER", "").strip() or "Team"
 
 
