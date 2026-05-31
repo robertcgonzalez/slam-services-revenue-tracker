@@ -40,10 +40,11 @@ python Scripts/health_check.py --full
 
 ---
 
-## Current Status (June 2026 — v2.45.0)
+## Current Status (June 2026 — v2.45.1)
 
 - **Laura/Stef pilot active (Path A)** after Gate A3 fully PASS; focus: sustained daily use + weekly Section 14 / `feedback_log.csv` triage.
-- **Next 90 Days:** payee rules auto-seed on Azure + DI/headless smoke apply; post-deploy Gate A3 smoke gate; QMS cadence — Blueprint Section 10; run file [`QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md`](QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md).
+- **Deploy discipline:** after every `Deploy-ToAzure.ps1`, run Gate A3 headless smoke + evidence collection — see [`docs/deployment.md`](docs/deployment.md) (or `-RunGateA3Smoke`).
+- **Payee rules** active on production Azure DI (`payee_rules_applied > 0` in smoke). Next backlog: Blueprint Section 10; run file [`QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md`](QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md).
 
 ### Production (Azure App Service — DI-only)
 

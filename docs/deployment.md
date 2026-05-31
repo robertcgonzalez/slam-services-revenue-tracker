@@ -23,6 +23,15 @@ This is the current production path (v2.38.3+). It avoids the ~230s load-balance
 cd C:\SLAM-Services-Project
 .\Scripts\PowerShell\Build-AzureDeployZip.ps1
 .\Scripts\PowerShell\Deploy-ToAzure.ps1
+# Mandatory after every code deploy (see "Post-deploy Gate A3 smoke gate" below):
+.\Scripts\PowerShell\Invoke-GateA3HeadlessSmoke.ps1 -WaitMinutes 35
+.\Scripts\PowerShell\Collect-GateA3Evidence.ps1 -Both
+```
+
+Optional: run headless smoke in the same session as deploy (default off for safety; adds ~35 minutes):
+
+```powershell
+.\Scripts\PowerShell\Deploy-ToAzure.ps1 -RunGateA3Smoke
 ```
 
 What it does (idempotent & safe):
@@ -209,6 +218,32 @@ See `Scripts/PowerShell/Set-AzurePostgresAppSettings.ps1` for a helper that conf
 
 ---
 
+## Post-deploy Gate A3 smoke gate (mandatory)
+
+After **every** `Deploy-ToAzure.ps1` (or equivalent zip deploy to production), run the headless Bank Statements regression on the two canonical PDFs. This verifies DI, imaging leg, payee rules, and `SMOKE_EVIDENCE` on the live App Service — not just HTTP reachability.
+
+**Prerequisites**: `Data\HCC 2026-04.pdf` and `Data\Auto_Body_Center_Jan_26_Statement.pdf` present locally; Azure CLI logged in; allow **~35 minutes** (upload + app restart + DI processing).
+
+```powershell
+cd C:\SLAM-Services-Project
+.\Scripts\PowerShell\Invoke-GateA3HeadlessSmoke.ps1 -WaitMinutes 35
+.\Scripts\PowerShell\Collect-GateA3Evidence.ps1 -Both
+```
+
+- `Invoke-GateA3HeadlessSmoke.ps1` — Kudu upload to `wwwroot/tmp/`, enables `SLAM_RUN_GATE_A3_SMOKE`, restarts app, polls `gate-a3-smoke.log` for fresh DONE markers.
+- `Collect-GateA3Evidence.ps1 -Both` — harvests `SMOKE_EVIDENCE` from Kudu logs; **exits non-zero** if either canonical key is missing. Add `-UpdateDocs` when refreshing scorecard artifacts under `docs/gate-a3/`.
+
+**Do not** treat a deploy as complete until both scripts exit 0. GitHub Actions deploys must run the same pair (or an equivalent documented step) before declaring production healthy.
+
+**Combined with deploy** (opt-in switch, default off):
+
+```powershell
+.\Scripts\PowerShell\Build-AzureDeployZip.ps1
+.\Scripts\PowerShell\Deploy-ToAzure.ps1 -RunGateA3Smoke
+```
+
+---
+
 ## Health & Smoke Checks After Deploy
 
 ```powershell
@@ -294,7 +329,9 @@ python Scripts/health_check.py --full
 ## Related Scripts
 
 - `Scripts/PowerShell/Build-AzureDeployZip.ps1` — produces the flat `slam-app.zip`
-- `Scripts/PowerShell/Deploy-ToAzure.ps1` — the modern safe deploy orchestrator
+- `Scripts/PowerShell/Deploy-ToAzure.ps1` — the modern safe deploy orchestrator (`-RunGateA3Smoke` optional post-deploy Gate A3 regression)
+- `Scripts/PowerShell/Invoke-GateA3HeadlessSmoke.ps1` — mandatory post-deploy DI smoke (canonical PDFs)
+- `Scripts/PowerShell/Collect-GateA3Evidence.ps1` — harvest `SMOKE_EVIDENCE` after smoke (`-Both` required)
 - `Scripts/PowerShell/Verify-AzureWwwRoot.ps1` — post-deploy Kudu check for root startup files
 - `Scripts/PowerShell/Set-AzureStartupCommand.ps1` — set `appCommandLine` to `./startup.sh` (canonical production value)
 - `Scripts/PowerShell/Clear-AzureStartupCommand.ps1` — remove a blocking raw `streamlit run ...` override only (then run Set-AzureStartupCommand or redeploy)
@@ -303,7 +340,7 @@ python Scripts/health_check.py --full
 
 ---
 
-**Last major update to this guide**: 2026-05-29 — Python Oryx `output.tar.zst` root-cause, deploy guarantee step, build zip exclusions. Earlier history in Blueprint Change Log (v2.38.3, v2.44.x deployment notes).
+**Last major update to this guide**: 2026-05-31 — mandatory post-deploy Gate A3 smoke gate (`Invoke-GateA3HeadlessSmoke.ps1` + `Collect-GateA3Evidence.ps1 -Both`); `Deploy-ToAzure.ps1 -RunGateA3Smoke`. Earlier history in Blueprint Change Log.
 
 ---
 

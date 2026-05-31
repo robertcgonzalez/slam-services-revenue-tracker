@@ -29,6 +29,10 @@
 
 .EXAMPLE
   .\Scripts\PowerShell\Deploy-ToAzure.ps1 -CleanDeploy -TimeoutSeconds 900
+
+.EXAMPLE
+  .\Scripts\PowerShell\Deploy-ToAzure.ps1 -RunGateA3Smoke
+  # After deploy, runs Invoke-GateA3HeadlessSmoke.ps1 then Collect-GateA3Evidence.ps1 -Both (~35 min).
 #>
 param(
     [string]$ResourceGroup = "SLAM-Services-RG",
@@ -42,7 +46,9 @@ param(
     [switch]$SkipSmokeTest,
     [switch]$CleanDeploy,
     [switch]$SkipWwwRootGuarantee,
-    [switch]$SkipDeploy
+    [switch]$SkipDeploy,
+    [switch]$RunGateA3Smoke,
+    [int]$GateA3SmokeWaitMinutes = 35
 )
 
 $ErrorActionPreference = "Stop"
@@ -598,6 +604,30 @@ if (-not $SkipSmokeTest) {
         Write-Step "Poppler probe (post-startup, via Kudu)"
         Test-PopplerViaKudu -ScmBase $scmBase -Headers $kuduHeaders | Out-Null
     }
+}
+
+if ($RunGateA3Smoke) {
+    Write-Step "Gate A3 post-deploy regression (headless smoke + evidence)"
+    Write-Host "  Requires canonical PDFs under Data/; expect ~${GateA3SmokeWaitMinutes}m." -ForegroundColor DarkGray
+    $smokeScript = Join-Path $PSScriptRoot "Invoke-GateA3HeadlessSmoke.ps1"
+    $collectScript = Join-Path $PSScriptRoot "Collect-GateA3Evidence.ps1"
+    foreach ($script in @($smokeScript, $collectScript)) {
+        if (-not (Test-Path $script)) {
+            Write-Err2 "Gate A3 script missing: $script"
+            exit 1
+        }
+    }
+    & $smokeScript -ResourceGroup $ResourceGroup -AppName $WebAppName -WaitMinutes $GateA3SmokeWaitMinutes
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err2 "Invoke-GateA3HeadlessSmoke.ps1 failed (exit $LASTEXITCODE). Deploy artifacts are live; fix smoke before pilot."
+        exit $LASTEXITCODE
+    }
+    & $collectScript -Both
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err2 "Collect-GateA3Evidence.ps1 -Both failed (exit $LASTEXITCODE)."
+        exit $LASTEXITCODE
+    }
+    Write-Ok "Gate A3 post-deploy smoke PASS (headless + evidence for HCC and Auto Body)"
 }
 
 Write-Step "Done"

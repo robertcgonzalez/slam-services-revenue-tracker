@@ -1,6 +1,6 @@
 # Risk & Opportunity Register (Living)
 
-**Last Reviewed**: 2026-05-30 (Next 90 Days roadmap + payee rules bootstrap v2.45.0)  
+**Last Reviewed**: 2026-05-31 (v2.45.1 — post-deploy smoke gate + QMS closure)  
 **Review Cadence**: Every Management Review + after any major spike or incident
 
 **Instructions**: Add new rows as risks are identified. Update status / mitigation as actions are taken. High and Medium items must be discussed in every Management Review and State Alignment run.
@@ -16,10 +16,10 @@
 | R-003 | ~~Codespaces onboarding/auth friction~~ | — | — | Robert | **Closed (v2.44.16)** — Codespaces/devcontainer path removed; local Windows + `Setup-LocalVenv.ps1` / `Install-LocalHeavyOcr.ps1` only. | 2026-05-28 | Retired with env policy |
 | R-004 | Future OneDrive / document management automation could introduce new data classification or retention risks | Low | High | Robert (future) | Document Retention Policy already in Blueprint Section 9. Will be re-evaluated when that workstream activates. | 2026-05-28 | Future CAPA / risk when scoped |
 | R-005 | Agent-generated code or documentation could silently violate anti-bloat or roles matrix over many small sessions | Low | Medium | All agents + Robert | Strong standing orders in agent contracts + Documentation Roles Matrix + mandatory Blueprint Change Log discipline. State Alignment process now watches for this specifically. | 2026-05-28 | Core QMS control (Section 15.1) |
-| R-006 | Git + memorialization discipline lapsed in practice — substantial v2.44.19–20 work existed uncommitted | Medium | High | Robert + agents | Session Close checklist in `docs/memorialization-discipline.md`; mandatory agent contract language; Gate A3 + v2.45.0 on `origin/main`. | 2026-05-30 | Memorialization Enforcement |
-| R-007 | QMS activation incomplete — feedback loop, State Alignment runs, and O-002 visibility delayed | Medium | Medium | Robert | O-002 shipped; feedback_log seeded; first post-baseline State Alignment run; post-incident Management Review stub. | 2026-05-29 | QMS Activation |
+| R-006 | Git + memorialization discipline lapsed in practice — substantial v2.44.19–20 work existed uncommitted | Low | High | Robert + agents | Session Close checklist + `Invoke-GitVerification.ps1`; Gate A3 on `origin/main`; **mandatory post-deploy smoke** in `docs/deployment.md` + `Deploy-ToAzure.ps1 -RunGateA3Smoke` (v2.45.1). | 2026-05-31 | Memorialization Enforcement |
+| R-007 | QMS activation incomplete — feedback loop, State Alignment runs, and O-002 visibility delayed | Low | Medium | Robert | O-002 shipped; feedback_log seeded; State Alignment runs active; **post-incident Management Review closed** 2026-05-31. | 2026-05-31 | QMS Activation |
 | R-008 | Dual-agent orchestrator now a production operational dependency for complex Azure recovery | Low | Medium | Robert | `docs/handoffs/` pattern + `Invoke-DualAgentHandoff.ps1`; document in deployment runbook; do not over-rely without human verification. | 2026-05-29 | Procedure / tooling |
-| R-009 | Laura/Stef pilot adoption stalls — insufficient real `feedback_log.csv` volume or recurring P0 blockers | Low | High | Robert / Laura | Sustained pilot target (2+ statements/week); weekly Section 14 triage; Next 90 Days run file + Blueprint Section 10 backlog. | 2026-05-30 | Pilot sustainment |
+| R-009 | Laura/Stef pilot adoption stalls — insufficient real `feedback_log.csv` volume or recurring P0 blockers | Low | High | Robert / Laura | Gate A3 PASS; payee rules active on Azure (`payee_rules_applied > 0`); post-deploy smoke gate enforced; sustained pilot + weekly Section 14 triage. | 2026-05-31 | Pilot sustainment |
 
 ## Closed / Mitigated Risks (recent)
 

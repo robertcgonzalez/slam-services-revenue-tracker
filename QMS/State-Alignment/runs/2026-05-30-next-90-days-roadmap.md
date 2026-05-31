@@ -13,7 +13,9 @@
 | Gate A3 hardening on `origin/main` | **Done** (v2.44.32, commit `0b0d28f`) |
 | Blueprint Section 10 — Next 90 Days | **Done** (v2.45.0) |
 | Payee rules Azure bootstrap (P1) | **Done** (v2.45.0) — seed + `post_process_bank_statement_df` in DI + headless smoke |
-| Production re-smoke `payee_rules_applied > 0` | **Pending** — requires deploy + `Invoke-GateA3HeadlessSmoke.ps1` after push |
+| Production re-smoke `payee_rules_applied > 0` | **Done** (v2.45.0) |
+| Post-deploy smoke gate in `docs/deployment.md` | **Done** (v2.45.1) |
+| Post-incident Management Review closure | **Done** (v2.45.1) |
 
 ---
 
@@ -26,6 +28,6 @@
 
 ---
 
-## Backlog (not in this session)
+## Backlog (remaining)
 
-Post-deploy smoke gate in `docs/deployment.md`; Auto Body withdrawal residual; Management Review closure; Phase 3 gates — see plan backlog table in Blueprint Section 10.
+Auto Body withdrawal residual; reconciliation banner; Phase 3 gates — see Blueprint Section 10.

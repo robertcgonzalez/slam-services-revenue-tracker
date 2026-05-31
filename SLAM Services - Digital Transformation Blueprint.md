@@ -1,11 +1,12 @@
 # SLAM Services - Digital Transformation Blueprint
 
-**Version**: 2.45.0  
+**Version**: 2.45.1  
 **Date**: June 2026  
-**Status**: **Local Windows is the sole supported development environment.** Production App Service on B2; Bank Statements UI is **Azure DI-only** in production. **Gate A3: fully PASS** (v2.44.32); **Laura pilot active (Path A).** **Next 90 Days (June–Aug 2026):** operational confidence — payee rules bootstrap on Azure, sustained pilot + feedback loop, mandatory post-deploy smoke, QMS cadence (see Section 10). **Payee rules:** canonical 25-pattern seed auto-created on App Service `Data/payee_rules.csv`; DI pipeline + headless Gate A3 smoke apply rules (`payee_rules_applied` in `SMOKE_EVIDENCE`). **Cursor is primary agent**; Grok secondary. **QMS baseline (hub):** [`QMS/`](QMS/README.md).
+**Status**: **Local Windows is the sole supported development environment.** Production App Service on B2; Bank Statements UI is **Azure DI-only** in production. **Gate A3: fully PASS** (v2.44.32); **Laura pilot active (Path A).** **Post-deploy:** mandatory headless Gate A3 smoke after every `Deploy-ToAzure.ps1` (`docs/deployment.md`; optional `-RunGateA3Smoke`). **Payee rules:** active on Azure DI (`payee_rules_applied > 0` in smoke). **QMS:** post-incident Management Review closed 2026-05-31. **Cursor is primary agent**; Grok secondary. **QMS baseline (hub):** [`QMS/`](QMS/README.md).
 
 ## Change Log
 
+- **v2.45.1 (2026-05-31)**: **Next 90 Days P0/P1 — post-deploy smoke gate + QMS closure.** P0: `docs/deployment.md` — mandatory sequence `Invoke-GateA3HeadlessSmoke.ps1` + `Collect-GateA3Evidence.ps1 -Both` after every deploy; `Deploy-ToAzure.ps1 -RunGateA3Smoke` (default off). P1: closed `QMS/Management-Reviews/2026-05-29-post-incident-review.md`; `feedback_log.csv` payee-rules activation row; `QMS/Risk-Register.md` (R-006/R-007/R-009, last reviewed 2026-05-31). Section 10 backlog pointer updated — no duplicate narrative in README.
 - **v2.45.0 (2026-05-30)**: **Next 90 Days P0/P1 — Gate A3 memorialization closure + Azure payee rules bootstrap.** P0: Gate A3 hardening already on `origin/main` (`0b0d28f` / v2.44.32). P1: `App/bank_statements.py` — `PAYEE_RULES_SEED_ROWS` (25 patterns, v2.39 canonical list), `bootstrap_payee_rules_file()`, `post_process_bank_statement_df()`; Azure DI pipeline and `Scripts/Python/run_gate_a3_headless_smoke.py` apply rules before `SMOKE_EVIDENCE`. `Scripts/test_azure_assembly.py` payee-rules unit test. Memorialization: Section 10 **Next 90 Days** subsection; `QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md`; `feedback_log.csv` row; `QMS/Risk-Register.md` (R-009, Gate A3 imaging mitigated). Planning session: `.cursor/plans/next_90_days_roadmap_8de4e624.plan.md`.
 - **v2.44.32 (2026-05-31)**: **Gate A3 fully PASS — Laura pilot cleared (Path A).** Root cause of intermittent Auto Body withdrawal inflation: stale PNGs in `cropped_checks_final_dynamic/checks/` not cleared between runs (HCC crops leaked into Auto Body DI pass → 108 rows / **$60,374**). Fix: purge `checks/`, `deposits/`, and sidecar JSON on each cropper run; per-crop Azure DI best-check pick; supplemental amount self-dedupe; statement-summary trim hook (text PDFs). **Production re-smoke** (`Invoke-GateA3HeadlessSmoke.ps1` + `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`, deploy `1ef9aa54`): HCC unchanged (98 rows, gold totals); Auto Body **94 rows**, withdrawals **$41,130.18** vs gold **$41,403.63**, deposits match. Tests: `Scripts/test_azure_assembly.py` extended.
 - **v2.44.31 (2026-05-30)**: **Gate A3 — supplemental amount dedupe fix (Auto Body).** `App/bank_statements.py`: reject OCR outlier check amounts (>$10k, e.g. $238,216 / $52,500 memo bleed); skip deposit-slip mis-crops; resolve duplicate check# variants to median-nearest amount; multiset register-debit amount matching; deposit/EFT-aware register pruning when imaging leg appends supplemental rows; stricter `_dedupe_azure_transactions` cross-source amount dedupe. **Local Azure DI verification:** Auto Body withdrawals **$41,130** (was **$354,909** / **$335,665** pre-fix), deposits **$41,786.80** (gold match), 94 rows; HCC unchanged (98 rows, gold totals, 0 supplemental). Tests: `Scripts/test_azure_assembly.py` extended. Production re-smoke required before Laura pilot Path A.
@@ -501,8 +502,11 @@ Operational shift from Gate A3 engineering closure to **daily-driver confidence*
 
 | Priority | Focus | Target |
 |----------|--------|--------|
-| P0 | Sustained pilot (2+ statements/week), weekly Section 14 triage, mandatory post-deploy `Invoke-GateA3HeadlessSmoke.ps1` | v2.45.0 |
-| P1 | Payee rules on Azure (`payee_rules_applied > 0` in smoke), Auto Body withdrawal residual, reconciliation banner, QMS Management Review cadence | v2.45.0–v2.45.1 |
+| P0 | Sustained pilot (2+ statements/week), weekly Section 14 triage | v2.45.0+ |
+| P0 | Mandatory post-deploy `Invoke-GateA3HeadlessSmoke.ps1` + `Collect-GateA3Evidence.ps1 -Both` | **v2.45.1** (done — `docs/deployment.md`) |
+| P1 | Payee rules on Azure (`payee_rules_applied > 0` in smoke) | **v2.45.0** (done) |
+| P1 | Auto Body withdrawal residual, reconciliation banner | v2.45.1+ |
+| P1 | QMS Management Review cadence (post-incident close) | **v2.45.1** (done) |
 | P2 | Evidence hardening (Poppler harvest), deploy-authority policy | v2.45.2 |
 | P3 (gated) | Phase 3: P&L, check-image UI, OneDrive — after payee categorization + Laura sign-off (Section 8.1) | v2.46+ |
 
@@ -676,3 +680,4 @@ Per `QMS/State-Alignment/process.md`, findings from runtime + dual-agent session
 - **v2.44.23**: Closed session b27ef5d6-362. Root cause of Cursor RunResult(error) on turn 1 was placeholder Prime Directive in orchestrator.py (single place). Fixed; verification run per `docs/memorialization-discipline.md` (blocked on sensitive untracked — no commit). See `QMS/State-Alignment/runs/2026-05-30-b27ef5d6-362-orchestrator-pd-fix.md` for full minimal memorialization. This demonstrates the active feedback-to-Blueprint loop.
 - **v2.44.25**: Full drift audit Phases 1–3 closed per `QMS/State-Alignment/process.md` Step 3. Findings count and residual Phase 4 debt in `QMS/State-Alignment/runs/2026-05-30-full-drift-audit.md` — not duplicated here.
 - **v2.45.0**: Next 90 Days roadmap planning session memorialized — `QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md`; payee rules Azure bootstrap shipped (see Change Log).
+- **v2.45.1**: Post-deploy Gate A3 smoke gate (`docs/deployment.md`, `Deploy-ToAzure.ps1 -RunGateA3Smoke`); post-incident Management Review closed; Risk Register R-006/R-009 refreshed — see Change Log.
