@@ -237,18 +237,6 @@ SLAM_CSS = """
         padding: 0.5rem;
         border-radius: 6px;
     }
-    .slam-login-shell {
-        max-width: 420px;
-        margin: 2.5rem auto 0 auto;
-        padding: 0 1rem;
-    }
-    .slam-login-card {
-        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 2rem 1.75rem 1.25rem;
-        box-shadow: 0 4px 24px rgba(30, 58, 95, 0.08);
-    }
     .slam-login-header {
         text-align: center;
         margin-bottom: 1.25rem;
@@ -304,44 +292,44 @@ if "current_user" not in st.session_state:
 
 
 def login():
-    st.markdown(
-        '<div class="slam-login-shell"><div class="slam-login-card">', unsafe_allow_html=True
-    )
-    st.markdown(
-        """
-        <div class="slam-login-header">
-            <span class="slam-login-icon">📊</span>
-            <h2>SLAM Services</h2>
-            <p class="slam-login-tagline">Revenue Reporting Tracker</p>
-        </div>
-        <p class="slam-login-note">Shared team access — select your name for personalization</p>
-        """,
-        unsafe_allow_html=True,
-    )
+    _, col, _ = st.columns([1, 1.25, 1])
+    with col:
+        with st.container(border=True):
+            st.markdown(
+                """
+                <div class="slam-login-header">
+                    <span class="slam-login-icon">📊</span>
+                    <h2>SLAM Services</h2>
+                    <p class="slam-login-tagline">Revenue Reporting Tracker</p>
+                </div>
+                <p class="slam-login-note">Shared team access — select your name for personalization</p>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    selected_user = st.selectbox("Username", LOGIN_USER_CHOICES, index=0)
-    display_user = selected_user
-    if selected_user == "Other":
-        custom_name = st.text_input("Your name", placeholder="Enter your name")
-        display_user = (custom_name or "").strip()
+            selected_user = st.selectbox("Username", LOGIN_USER_CHOICES, index=0)
+            display_user = selected_user
+            if selected_user == "Other":
+                custom_name = st.text_input("Your name", placeholder="Enter your name")
+                display_user = (custom_name or "").strip()
 
-    password = st.text_input("Password", type="password", placeholder="Team password")
-    if not HAS_CUSTOM_PASSWORD:
-        st.caption("⚠️ Default password in use — set **SLAM_APP_PASSWORD** in Azure for production.")
+            password = st.text_input("Password", type="password", placeholder="Team password")
+            if not HAS_CUSTOM_PASSWORD:
+                st.caption(
+                    "⚠️ Default password in use — set **SLAM_APP_PASSWORD** in Azure for production."
+                )
 
-    if st.button("Sign in", type="primary", use_container_width=True):
-        if not display_user:
-            st.error("Please enter your name before signing in.")
-        elif password != APP_PASSWORD:
-            log_event(LOGGER, "login_failed", user=display_user or None)
-            st.error("Incorrect password. Contact Robert if you need a reset.")
-        else:
-            st.session_state.authenticated = True
-            st.session_state.current_user = display_user
-            log_event(LOGGER, "login_success", user=display_user)
-            st.rerun()
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
+            if st.button("Sign in", type="primary", use_container_width=True):
+                if not display_user:
+                    st.error("Please enter your name before signing in.")
+                elif password != APP_PASSWORD:
+                    log_event(LOGGER, "login_failed", user=display_user or None)
+                    st.error("Incorrect password. Contact Robert if you need a reset.")
+                else:
+                    st.session_state.authenticated = True
+                    st.session_state.current_user = display_user
+                    log_event(LOGGER, "login_success", user=display_user)
+                    st.rerun()
 
 
 if not st.session_state.authenticated:
