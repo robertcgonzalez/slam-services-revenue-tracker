@@ -195,11 +195,12 @@ from diagnostics import (
     get_data_freshness,
     get_operational_hints,
     get_qms_status,
+    get_time_greeting,
 )
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.44"
+APP_VERSION = "v2.45.6"
 LOGGER = setup_app_logging()
 
 SLAM_CSS = """
@@ -213,29 +214,93 @@ SLAM_CSS = """
         border-radius: 4px;
         margin-bottom: 1rem;
     }
+    .slam-dashboard-hero {
+        background: linear-gradient(135deg, #f0f7ff 0%, #f8fafc 100%);
+        border: 1px solid #cbd5e1;
+        border-left: 5px solid #1e3a5f;
+        padding: 1.25rem 1.5rem;
+        border-radius: 10px;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 1px 4px rgba(30, 58, 95, 0.06);
+    }
+    .slam-dashboard-greeting {
+        margin: 0;
+        color: #1e3a5f;
+        font-size: 1.75rem;
+        font-weight: 700;
+        line-height: 1.25;
+    }
+    .slam-dashboard-date {
+        margin: 0.4rem 0 0;
+        color: #5a6c7d;
+        font-size: 0.95rem;
+    }
+    .slam-section-header {
+        color: #1e3a5f;
+        font-size: 1.05rem;
+        font-weight: 600;
+        margin: 0 0 0.75rem 0;
+        padding-bottom: 0.35rem;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .slam-section-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1rem 1.15rem;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
     .slam-priority-hero {
         background: linear-gradient(135deg, #fff1f2 0%, #fff8e6 100%);
         border: 2px solid #dc2626;
         border-left: 6px solid #dc2626;
-        padding: 1rem 1.25rem;
-        border-radius: 8px;
-        margin: 0.5rem 0 1rem 0;
-        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.12);
+        padding: 1.15rem 1.35rem;
+        border-radius: 10px;
+        margin: 0.5rem 0 1.25rem 0;
+        box-shadow: 0 3px 12px rgba(220, 38, 38, 0.14);
     }
-    .slam-priority-hero h4 { margin: 0 0 0.35rem 0; color: #991b1b; font-size: 1.15rem; }
-    .slam-priority-hero p { margin: 0; color: #7f1d1d; font-size: 0.95rem; }
+    .slam-priority-hero h4 {
+        margin: 0 0 0.4rem 0;
+        color: #991b1b;
+        font-size: 1.2rem;
+        font-weight: 700;
+    }
+    .slam-priority-hero p { margin: 0; color: #7f1d1d; font-size: 0.95rem; line-height: 1.45; }
     .slam-priority-caught-up {
-        background: #ecfdf5;
+        background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
         border: 2px solid #059669;
         border-left: 6px solid #059669;
-        padding: 1rem 1.25rem;
-        border-radius: 8px;
-        margin: 0.5rem 0 1rem 0;
+        padding: 1.15rem 1.35rem;
+        border-radius: 10px;
+        margin: 0.5rem 0 1.25rem 0;
+        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.1);
     }
+    .slam-priority-caught-up strong { color: #065f46; font-size: 1.05rem; }
     div[data-testid="stMetric"] {
         background: #f8fafc;
-        padding: 0.5rem;
-        border-radius: 6px;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+    }
+    .slam-sidebar-user {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 0.65rem 0.85rem;
+        margin-bottom: 0.5rem;
+    }
+    .slam-sidebar-user-name {
+        color: #1e3a5f;
+        font-size: 0.95rem;
+        font-weight: 600;
+        margin: 0;
+    }
+    .slam-sidebar-status {
+        color: #64748b;
+        font-size: 0.82rem;
+        margin: 0.25rem 0 0;
+        line-height: 1.4;
     }
     .slam-login-header {
         text-align: center;
@@ -267,6 +332,11 @@ SLAM_CSS = """
         background: #f1f5f9;
         border-radius: 6px;
         border-left: 3px solid #1e3a5f;
+    }
+    @media (max-width: 768px) {
+        .slam-dashboard-greeting { font-size: 1.4rem; }
+        .slam-dashboard-hero { padding: 1rem; }
+        .slam-section-card { padding: 0.85rem; }
     }
 </style>
 """
@@ -972,7 +1042,6 @@ def render_todays_priority(req_df: pd.DataFrame) -> None:
             "</div>",
             unsafe_allow_html=True,
         )
-        st.success("✅ **All caught up!** Nothing overdue across your full client list.")
         return
 
     count = len(overdue)
@@ -1045,14 +1114,19 @@ def render_todays_priority(req_df: pd.DataFrame) -> None:
 
 # --- Dashboard page enhancements (dynamic KPIs, overdue alerts) ---
 def dashboard_page(clients_df, req_df, filtered):
-    st.header("📈 SLAM Services Revenue Overview")
+    greeting = get_time_greeting()
+    user = get_app_user()
+    date_str = datetime.now().strftime("%A, %B %d, %Y")
     st.markdown(
-        f'<p class="slam-subtle">Welcome — {datetime.now().strftime("%A, %B %d, %Y")}</p>',
+        f'<div class="slam-dashboard-hero">'
+        f'<h2 class="slam-dashboard-greeting">{greeting}, {user}!</h2>'
+        f'<p class="slam-dashboard-date">{date_str}</p>'
+        f"</div>",
         unsafe_allow_html=True,
     )
+
     render_uat_welcome()
     render_todays_priority(req_df)
-    st.divider()
 
     total_clients = len(clients_df)
     total_pending_amt = filtered[filtered["status"].isin(["Pending", "Received", "Invoiced"])][
@@ -1063,54 +1137,66 @@ def dashboard_page(clients_df, req_df, filtered):
         100 * len(filtered[filtered["status"] == "Paid"]) / max(1, len(filtered)), 1
     )
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Clients", total_clients)
-    c2.metric("Pending Amount", f"${total_pending_amt:,.0f}")
-    c3.metric("Overdue Items", overdue_cnt)
-    c4.metric("Paid Rate", f"{completion_pct}%")
+    with st.container(border=True):
+        st.markdown('<p class="slam-section-header">Key metrics</p>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Clients", total_clients)
+        c2.metric("Pending Amount", f"${total_pending_amt:,.0f}")
+        c3.metric("Overdue Items", overdue_cnt)
+        c4.metric("Paid Rate", f"{completion_pct}%")
 
-    full_doc = missing_document_counts(req_df)
-    if full_doc["missing_either"]:
-        st.caption(
-            f"**Missing documents** (all active requests): "
-            f"{full_doc['missing_bank']} need bank statement · "
-            f"{full_doc['missing_sales']} need sales report · "
-            f"{full_doc['missing_both']} need both. "
-            "Use **Bank Statements** page to process PDFs, then **Mark as Received**."
+        full_doc = missing_document_counts(req_df)
+        if full_doc["missing_either"]:
+            st.caption(
+                f"**Missing documents** (all active requests): "
+                f"{full_doc['missing_bank']} need bank statement · "
+                f"{full_doc['missing_sales']} need sales report · "
+                f"{full_doc['missing_both']} need both. "
+                "Use **Bank Statements** page to process PDFs, then **Mark as Received**."
+            )
+
+    with st.container(border=True):
+        st.markdown('<p class="slam-section-header">Status breakdown</p>', unsafe_allow_html=True)
+        status_counts = filtered["status"].value_counts().reset_index()
+        status_counts.columns = ["status", "count"]
+        st.bar_chart(status_counts, x="status", y="count")
+
+    with st.container(border=True):
+        st.markdown(
+            '<p class="slam-section-header">Overdue requests — action required</p>',
+            unsafe_allow_html=True,
         )
+        overdue = filtered[filtered.get("overdue", False)]
+        if not overdue.empty:
+            overdue_display = overdue.copy()
+            overdue_display["request_id"] = overdue_display["request_id"].map(format_request_id)
+            cols = [
+                "request_id",
+                "business_name",
+                "request_type",
+                "period",
+                "amount_due",
+                "due_date",
+                "days_overdue",
+                "notes",
+            ]
+            cols = [c for c in cols if c in overdue_display.columns]
+            st.dataframe(overdue_display[cols], width="stretch", hide_index=True)
+        else:
+            st.success("No overdue items in current filter.")
 
-    st.subheader("Status Breakdown")
-    status_counts = filtered["status"].value_counts().reset_index()
-    status_counts.columns = ["status", "count"]
-    st.bar_chart(status_counts, x="status", y="count")
-
-    st.subheader("Overdue Requests (Action Required)")
-    overdue = filtered[filtered.get("overdue", False)]
-    if not overdue.empty:
-        overdue_display = overdue.copy()
-        overdue_display["request_id"] = overdue_display["request_id"].map(format_request_id)
-        cols = [
-            "request_id",
-            "business_name",
-            "request_type",
-            "period",
-            "amount_due",
-            "due_date",
-            "days_overdue",
-            "notes",
-        ]
-        cols = [c for c in cols if c in overdue_display.columns]
-        st.dataframe(overdue_display[cols], width="stretch", hide_index=True)
-    else:
-        st.success("No overdue items in current filter.")
-
-    st.subheader("Recent Activity (last 10 records)")
-    recent = filtered.sort_values("due_date", ascending=False).head(10)
-    st.dataframe(
-        recent[["business_name", "request_type", "period", "status", "amount_due", "due_date"]],
-        width="stretch",
-        hide_index=True,
-    )
+    with st.container(border=True):
+        st.markdown(
+            '<p class="slam-section-header">Recent activity</p>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Last 10 records under current filters (by due date).")
+        recent = filtered.sort_values("due_date", ascending=False).head(10)
+        st.dataframe(
+            recent[["business_name", "request_type", "period", "status", "amount_due", "due_date"]],
+            width="stretch",
+            hide_index=True,
+        )
 
 
 # --- Clients page with revenue aggregates + enriched info ---
@@ -2740,18 +2826,42 @@ def _render_azure_check_summary() -> None:
         st.info(f"Merged payee names from Azure checks into **{payee_merged}** transaction row(s).")
 
 
-def render_sidebar_extras(
-    clients_df: pd.DataFrame,
-    req_df: pd.DataFrame,
-) -> None:
-    """Daily-driver sidebar: user, freshness, help, diagnostics, logout."""
-    st.sidebar.markdown("---")
-    st.sidebar.caption(f"Signed in · **{get_app_user()}**")
+def _sidebar_overdue_count(req_df: pd.DataFrame) -> int:
+    return int(
+        (
+            (req_df["status"].isin(["Pending", "Received"]))
+            & (pd.to_datetime(req_df["due_date"], errors="coerce") < datetime.now())
+        ).sum()
+    )
+
+
+def render_sidebar_header(req_df: pd.DataFrame) -> None:
+    """Top sidebar: signed-in user and one-line operational status."""
+    user = get_app_user()
+    mode_label = "PostgreSQL" if DATA_SOURCE == "postgresql" else "CSV"
+    mode_icon = "🗄️" if DATA_SOURCE == "postgresql" else "📁"
+    overdue = _sidebar_overdue_count(req_df)
+    status_bits = [f"{mode_icon} {mode_label}"]
+    if overdue:
+        status_bits.append(f"⚠️ {overdue} overdue")
+    else:
+        status_bits.append("✅ No overdue items")
+    st.sidebar.markdown(
+        f'<div class="slam-sidebar-user">'
+        f'<p class="slam-sidebar-user-name">Signed in as {user}</p>'
+        f'<p class="slam-sidebar-status">{" · ".join(status_bits)}</p>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
     if st.session_state.get("last_save_message"):
         st.sidebar.success(st.session_state["last_save_message"])
 
+
+def render_sidebar_freshness() -> None:
+    """Data freshness expander — auto-open when unavailable or DB degraded."""
     freshness = get_data_freshness(data_source=DATA_SOURCE, data_path=DATA_PATH)
-    with st.sidebar.expander("📅 Data freshness", expanded=False):
+    expand_freshness = not freshness.get("available") or DB_HEALTH != "ok"
+    with st.sidebar.expander("📅 Data freshness", expanded=expand_freshness):
         if freshness.get("available"):
             if DATA_SOURCE == "postgresql":
                 st.write(f"**{freshness.get('label')}** — {freshness.get('message', '')}")
@@ -2766,6 +2876,9 @@ def render_sidebar_extras(
         else:
             st.warning(freshness.get("message", "Data freshness unavailable"))
 
+
+def render_sidebar_help() -> None:
+    """Collapsed daily workflow + UAT checklist."""
     with st.sidebar.expander("❓ Daily workflow help", expanded=False):
         st.markdown(
             "**Morning (2 min)**\n"
@@ -2795,6 +2908,9 @@ def render_sidebar_extras(
             "- [ ] Tell Robert if anything blocks daily work (P0)"
         )
 
+
+def render_sidebar_system() -> None:
+    """Collapsed system / Azure pipeline diagnostics."""
     info = get_app_info(app_version=APP_VERSION, data_source=DATA_SOURCE, use_postgres=USE_POSTGRES)
     with st.sidebar.expander("🔧 System status", expanded=False):
         st.caption(f"Version **{info['version']}** · Mode: **{info['data_source']}**")
@@ -2806,7 +2922,6 @@ def render_sidebar_extras(
         if info["data_path_override"]:
             st.caption("SLAM_DATA_PATH override active")
 
-        # Azure Document Intelligence — sole OCR engine for bank statements (v2.41+).
         ocr_state = azure_ocr_status()
         if ocr_state["configured"]:
             st.caption("🤖 Azure Document Intelligence (bank statements): **configured** ✅")
@@ -2834,21 +2949,106 @@ def render_sidebar_extras(
         for hint in get_operational_hints(data_source=DATA_SOURCE, db_health=DB_HEALTH):
             st.caption(f"• {hint}")
 
+
+def render_sidebar_qms() -> None:
+    """Collapsed QMS baseline summary."""
+    with st.sidebar.expander("📋 QMS status", expanded=False):
         qms = get_qms_status(data_path=DATA_PATH)
         if qms["summary"] == "healthy":
-            st.caption("📋 QMS baseline: **healthy** ✅")
+            st.caption("Baseline: **healthy** ✅")
         else:
-            st.caption("📋 QMS baseline: **watch** ⚠️")
+            st.caption("Baseline: **watch** ⚠️")
         if qms["last_state_alignment"]:
-            st.caption(f"  ↳ Last State Alignment: `{qms['last_state_alignment']}`")
+            st.caption(f"Last State Alignment: `{qms['last_state_alignment']}`")
         if qms["last_management_review"]:
-            st.caption(f"  ↳ Last Management Review: `{qms['last_management_review']}`")
+            st.caption(f"Last Management Review: `{qms['last_management_review']}`")
         if qms["feedback"]["available"]:
             st.caption(
-                f"  ↳ Feedback log: {qms['feedback']['open']} open / {qms['feedback']['total']} total"
+                f"Feedback log: {qms['feedback']['open']} open / {qms['feedback']['total']} total"
             )
         for issue in qms["issues"]:
-            st.caption(f"  ↳ {issue}")
+            st.caption(f"• {issue}")
+
+
+def render_sidebar_bottom(req_df: pd.DataFrame) -> None:
+    """Bottom sidebar: feedback, exports, reload, logout."""
+    st.sidebar.markdown("---")
+
+    with st.sidebar.expander("📣 Submit runtime feedback", expanded=False):
+        st.caption("Writes to feedback_log.csv for the next iteration cycle.")
+        with st.form("feedback_form", clear_on_submit=True):
+            reported_by = st.selectbox("Reported by", ["Laura", "Stef", "Patty", "Robert", "Other"])
+            category = st.selectbox(
+                "Category",
+                [
+                    "Global Filter",
+                    "Dashboard",
+                    "Revenue Requests Table",
+                    "Bank Statements",
+                    "Bulk Update",
+                    "Data/Export",
+                    "Performance/Security",
+                    "Other",
+                ],
+            )
+            description = st.text_area("What is broken or missing? (be specific)", height=80)
+            priority = st.selectbox(
+                "Priority (your view)",
+                ["P0 - Blocking daily work", "P1 - Important for accuracy", "P2 - Nice to have"],
+            )
+            if st.form_submit_button("Submit feedback"):
+                if description.strip():
+                    log_path = _feedback_log_path()
+                    import csv as _csv
+                    from datetime import datetime as _dt
+
+                    row = [
+                        _dt.now().isoformat(timespec="seconds"),
+                        reported_by,
+                        category,
+                        description.strip().replace("\n", " "),
+                        priority,
+                        "Open",
+                        APP_VERSION,
+                    ]
+                    with open(log_path, "a", encoding="utf-8", newline="") as f:
+                        _csv.writer(f).writerow(row)
+                    st.success(
+                        "✅ Feedback recorded. Thank you — it will be reviewed in the next cycle."
+                    )
+                else:
+                    st.warning("Please enter a description before submitting.")
+
+    if st.sidebar.button("📆 Generate monthly revenue summary", use_container_width=True):
+        summary = req_df.copy()
+        summary["due_month"] = (
+            pd.to_datetime(summary["due_date"], errors="coerce").dt.to_period("M").astype(str)
+        )
+        summary_group = (
+            summary.groupby(["due_month", "status"])
+            .agg(total_requests=("request_id", "count"), total_amount=("amount_due", "sum"))
+            .reset_index()
+        )
+        csv_sum = io.StringIO()
+        summary_group.to_csv(csv_sum, index=False)
+        st.sidebar.download_button(
+            label="📥 Download monthly summary CSV",
+            data=csv_sum.getvalue(),
+            file_name=f"monthly_revenue_summary_{datetime.now().strftime('%Y%m')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    if st.sidebar.button("🔄 Force reload data", use_container_width=True):
+        if st.session_state.get("revenue_unsaved"):
+            st.sidebar.error(
+                "You have unsaved edits on Revenue Requests. Save or undo before reloading."
+            )
+        else:
+            log_event(LOGGER, "force_reload")
+            st.cache_data.clear()
+            st.session_state.pop("revenue_unsaved", None)
+            st.rerun()
 
     if st.sidebar.button("🚪 Log out", use_container_width=True):
         log_event(LOGGER, "logout", user=get_app_user())
@@ -2881,8 +3081,28 @@ def main():
             )
         st.stop()
 
+    render_sidebar_header(req_df)
     render_data_source_status(len(clients_df), len(req_df))
-    render_sidebar_extras(clients_df, req_df)
+    render_sidebar_freshness()
+
+    filters = render_global_filters(req_df)
+    st.session_state["last_filter_industry"] = filters["industry"]
+
+    filtered = apply_filters(req_df, clients_df, filters)
+
+    # Page navigation (goto_page set by Today's priority CTAs)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Navigation**")
+    _nav_pages = ["Dashboard", "Clients", "Revenue Requests", "Bank Statements"]
+    if st.session_state.get("goto_page") in _nav_pages:
+        st.session_state["nav_page"] = st.session_state.pop("goto_page")
+    if st.session_state.get("nav_page") not in _nav_pages:
+        st.session_state["nav_page"] = "Dashboard"
+    page = st.sidebar.radio("Go to", _nav_pages, key="nav_page", label_visibility="collapsed")
+
+    render_sidebar_help()
+    render_sidebar_system()
+    render_sidebar_qms()
 
     if USE_POSTGRES and len(req_df) == 0:
         st.warning(
@@ -2894,20 +3114,6 @@ def main():
             "Showing CSV fallback data but no requests loaded. "
             "Check that RevenueRequests.csv exists in the data folder."
         )
-
-    filters = render_global_filters(req_df)
-    st.session_state["last_filter_industry"] = filters["industry"]
-
-    filtered = apply_filters(req_df, clients_df, filters)
-
-    # Page navigation (goto_page set by Today's priority CTAs)
-    st.sidebar.title("Navigation")
-    _nav_pages = ["Dashboard", "Clients", "Revenue Requests", "Bank Statements"]
-    if st.session_state.get("goto_page") in _nav_pages:
-        st.session_state["nav_page"] = st.session_state.pop("goto_page")
-    if st.session_state.get("nav_page") not in _nav_pages:
-        st.session_state["nav_page"] = "Dashboard"
-    page = st.sidebar.radio("Go to", _nav_pages, key="nav_page")
 
     if page == "Dashboard":
         dashboard_page(clients_df, req_df, filtered)
@@ -2921,84 +3127,7 @@ def main():
     # Footer + export helpers
     st.caption(f"SLAM Services Digital Transformation • Azure Revenue Tracker • {APP_VERSION}")
 
-    if st.sidebar.button("🔄 Force reload data (clear caches)"):
-        if st.session_state.get("revenue_unsaved"):
-            st.sidebar.error(
-                "You have unsaved edits on Revenue Requests. Save or undo before reloading."
-            )
-        else:
-            log_event(LOGGER, "force_reload")
-            st.cache_data.clear()
-            st.session_state.pop("revenue_unsaved", None)
-            st.rerun()
-
-    # --- Structured, Persistent Feedback Collection (Phase 2.5 core process) ---
-    with st.sidebar.expander("📣 Submit Runtime Feedback", expanded=False):
-        st.caption(
-            "This form writes directly to the persistent feedback_log.csv so every observation is captured for the next iteration cycle."
-        )
-        with st.form("feedback_form", clear_on_submit=True):
-            reported_by = st.selectbox("Reported by", ["Laura", "Stef", "Patty", "Robert", "Other"])
-            category = st.selectbox(
-                "Category",
-                [
-                    "Global Filter",
-                    "Dashboard",
-                    "Revenue Requests Table",
-                    "Bank Statements",
-                    "Bulk Update",
-                    "Data/Export",
-                    "Performance/Security",
-                    "Other",
-                ],
-            )
-            description = st.text_area("What is broken or missing? (be specific)", height=80)
-            priority = st.selectbox(
-                "Priority (your view)",
-                ["P0 - Blocking daily work", "P1 - Important for accuracy", "P2 - Nice to have"],
-            )
-            if st.form_submit_button("Submit Feedback to Log"):
-                if description.strip():
-                    log_path = _feedback_log_path()
-                    import csv as _csv
-                    from datetime import datetime as _dt
-
-                    row = [
-                        _dt.now().isoformat(timespec="seconds"),
-                        reported_by,
-                        category,
-                        description.strip().replace("\n", " "),
-                        priority,
-                        "Open",
-                        APP_VERSION,
-                    ]
-                    with open(log_path, "a", encoding="utf-8", newline="") as f:
-                        _csv.writer(f).writerow(row)
-                    st.success(
-                        "✅ Feedback recorded. Thank you — it will be reviewed in the next cycle."
-                    )
-                else:
-                    st.warning("Please enter a description before submitting.")
-
-    # Monthly revenue summary export (always available)
-    if st.sidebar.button("📆 Generate Monthly Revenue Summary"):
-        summary = req_df.copy()
-        summary["due_month"] = (
-            pd.to_datetime(summary["due_date"], errors="coerce").dt.to_period("M").astype(str)
-        )
-        summary_group = (
-            summary.groupby(["due_month", "status"])
-            .agg(total_requests=("request_id", "count"), total_amount=("amount_due", "sum"))
-            .reset_index()
-        )
-        csv_sum = io.StringIO()
-        summary_group.to_csv(csv_sum, index=False)
-        st.sidebar.download_button(
-            label="📥 Download Monthly Summary CSV",
-            data=csv_sum.getvalue(),
-            file_name=f"monthly_revenue_summary_{datetime.now().strftime('%Y%m')}.csv",
-            mime="text/csv",
-        )
+    render_sidebar_bottom(req_df)
 
 
 if __name__ == "__main__":

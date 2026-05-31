@@ -13,6 +13,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _QMS_DIR = _REPO_ROOT / "QMS"
 
 
+def get_time_greeting(*, now: datetime | None = None) -> str:
+    """Time-of-day salutation for dashboard hero (morning / afternoon / evening)."""
+    hour = (now or datetime.now()).hour
+    if hour < 12:
+        return "Good morning"
+    if hour < 17:
+        return "Good afternoon"
+    return "Good evening"
+
+
 def get_app_user() -> str:
     """Display name: session login choice first, then SLAM_APP_USER env, else Team."""
     try:
