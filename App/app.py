@@ -243,14 +243,6 @@ SLAM_CSS = """
         padding-bottom: 0.35rem;
         border-bottom: 1px solid #e2e8f0;
     }
-    .slam-section-card {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 1rem 1.15rem;
-        margin-bottom: 1.25rem;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
-    }
     .slam-priority-hero {
         background: linear-gradient(135deg, #fff1f2 0%, #fff8e6 100%);
         border: 2px solid #dc2626;
@@ -336,7 +328,6 @@ SLAM_CSS = """
     @media (max-width: 768px) {
         .slam-dashboard-greeting { font-size: 1.4rem; }
         .slam-dashboard-hero { padding: 1rem; }
-        .slam-section-card { padding: 0.85rem; }
     }
 </style>
 """
@@ -769,23 +760,6 @@ def _editor_has_unsaved_changes(edited: pd.DataFrame, original: pd.DataFrame) ->
     return not left.equals(right)
 
 
-def render_uat_welcome() -> None:
-    """One-time dismissible banner for Laura/Stef UAT kickoff."""
-    if st.session_state.get("uat_welcome_dismissed"):
-        return
-    st.info(
-        "**Welcome to UAT week** — your daily workflow: "
-        "1) Dashboard → Today's priority  "
-        "2) Sidebar quick views (Overdue / This Month)  "
-        "3) Revenue Requests → edit → **Save**  "
-        "4) Use **Undo** if you make a mistake  "
-        "5) Submit feedback in the sidebar if anything feels wrong."
-    )
-    if st.button("Got it — hide this banner", key="btn_dismiss_uat"):
-        st.session_state["uat_welcome_dismissed"] = True
-        st.rerun()
-
-
 # --- Global filters in sidebar (propagate across pages) ---
 def render_global_filters(req_df):
     st.sidebar.title("🔎 Global Filters")
@@ -901,6 +875,34 @@ def render_global_filters(req_df):
         "missing_docs_only": preset == "missing_docs",
         "filter_preset": preset,
     }
+
+
+def filters_at_default(f: dict, req_df: pd.DataFrame) -> bool:
+    """True when sidebar shows the unfiltered view (Today's priority already lists all overdue)."""
+    if f.get("filter_preset"):
+        return False
+    if f.get("overdue_only") or f.get("this_month_only") or f.get("missing_docs_only"):
+        return False
+    if f.get("industry") not in (None, "All"):
+        return False
+    all_status = ["Pending", "Received", "Invoiced", "Paid"]
+    if set(f.get("status") or []) != set(all_status):
+        return False
+    base_types = req_df["request_type"].dropna().unique().tolist() if len(req_df) else []
+    extra_types = ["Payroll", "Tax prep"]
+    all_types = sorted(set(base_types) | set(extra_types))
+    if set(f.get("request_type") or []) != set(all_types):
+        return False
+    min_d = pd.to_datetime(req_df["due_date"], errors="coerce").min()
+    max_d = pd.to_datetime(req_df["due_date"], errors="coerce").max()
+    if pd.isna(min_d):
+        min_d = datetime(2025, 10, 1)
+    if pd.isna(max_d):
+        max_d = datetime(2026, 6, 10)
+    dr = f.get("date_range")
+    if not dr or len(dr) != 2:
+        return False
+    return dr[0] == min_d.date() and dr[1] == max_d.date()
 
 
 def apply_filters(req_df, clients_df, f):
@@ -1032,6 +1034,7 @@ def get_all_overdue(req_df: pd.DataFrame) -> pd.DataFrame:
 
 def render_todays_priority(req_df: pd.DataFrame) -> None:
     """Prominent dashboard briefing — always uses full dataset, not sidebar filters."""
+    st.caption("**Today's priority** — full overdue list (not affected by sidebar filters).")
     overdue = get_all_overdue(req_df)
 
     if overdue.empty:
@@ -1113,7 +1116,7 @@ def render_todays_priority(req_df: pd.DataFrame) -> None:
 
 
 # --- Dashboard page enhancements (dynamic KPIs, overdue alerts) ---
-def dashboard_page(clients_df, req_df, filtered):
+def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
     greeting = get_time_greeting()
     user = get_app_user()
     date_str = datetime.now().strftime("%A, %B %d, %Y")
@@ -1125,7 +1128,6 @@ def dashboard_page(clients_df, req_df, filtered):
         unsafe_allow_html=True,
     )
 
-    render_uat_welcome()
     render_todays_priority(req_df)
 
     total_clients = len(clients_df)
@@ -1161,29 +1163,32 @@ def dashboard_page(clients_df, req_df, filtered):
         status_counts.columns = ["status", "count"]
         st.bar_chart(status_counts, x="status", y="count")
 
-    with st.container(border=True):
-        st.markdown(
-            '<p class="slam-section-header">Overdue requests — action required</p>',
-            unsafe_allow_html=True,
-        )
-        overdue = filtered[filtered.get("overdue", False)]
-        if not overdue.empty:
-            overdue_display = overdue.copy()
-            overdue_display["request_id"] = overdue_display["request_id"].map(format_request_id)
-            cols = [
-                "request_id",
-                "business_name",
-                "request_type",
-                "period",
-                "amount_due",
-                "due_date",
-                "days_overdue",
-                "notes",
-            ]
-            cols = [c for c in cols if c in overdue_display.columns]
-            st.dataframe(overdue_display[cols], width="stretch", hide_index=True)
-        else:
-            st.success("No overdue items in current filter.")
+    show_filtered_overdue = filters is not None and not filters_at_default(filters, req_df)
+    if show_filtered_overdue:
+        with st.container(border=True):
+            st.markdown(
+                '<p class="slam-section-header">Overdue requests — action required</p>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Overdue items matching your current sidebar filters.")
+            overdue = filtered[filtered.get("overdue", False)]
+            if not overdue.empty:
+                overdue_display = overdue.copy()
+                overdue_display["request_id"] = overdue_display["request_id"].map(format_request_id)
+                cols = [
+                    "request_id",
+                    "business_name",
+                    "request_type",
+                    "period",
+                    "amount_due",
+                    "due_date",
+                    "days_overdue",
+                    "notes",
+                ]
+                cols = [c for c in cols if c in overdue_display.columns]
+                st.dataframe(overdue_display[cols], width="stretch", hide_index=True)
+            else:
+                st.success("No overdue items in current filter.")
 
     with st.container(border=True):
         st.markdown(
@@ -2896,6 +2901,10 @@ def render_sidebar_help() -> None:
         )
 
     with st.sidebar.expander("📋 UAT checklist (week 1)", expanded=False):
+        st.caption(
+            "Tip: Start on **Dashboard** → **Today's priority**, then sidebar quick views; "
+            "**Save** on Revenue Requests and **Undo** if needed."
+        )
         st.markdown(
             "- [ ] Log in and confirm your name shows in the sidebar\n"
             "- [ ] Dashboard loads with client counts (not blank tables)\n"
@@ -3116,7 +3125,7 @@ def main():
         )
 
     if page == "Dashboard":
-        dashboard_page(clients_df, req_df, filtered)
+        dashboard_page(clients_df, req_df, filtered, filters)
     elif page == "Clients":
         clients_page(clients_df, req_df, filtered)
     elif page == "Revenue Requests":
