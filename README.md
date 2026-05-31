@@ -40,7 +40,10 @@ python Scripts/health_check.py --full
 
 ---
 
-## Current Status (June 2026 — Post DI Go-Live)
+## Current Status (June 2026 — v2.45.0)
+
+- **Laura/Stef pilot active (Path A)** after Gate A3 fully PASS; focus: sustained daily use + weekly Section 14 / `feedback_log.csv` triage.
+- **Next 90 Days:** payee rules auto-seed on Azure + DI/headless smoke apply; post-deploy Gate A3 smoke gate; QMS cadence — Blueprint Section 10; run file [`QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md`](QMS/State-Alignment/runs/2026-05-30-next-90-days-roadmap.md).
 
 ### Production (Azure App Service — DI-only)
 
@@ -60,7 +63,7 @@ python Scripts/health_check.py --full
 - **Azure OCR Function** (`slam-ocr-function`): parked; not the production path.
 - **CSV mode**: zero-disruption fallback when Postgres is disabled (requires server-side CSVs — not for daily driver).
 
-**Full history**: Blueprint Change Log (v2.30 → **v2.44.32**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
+**Full history**: Blueprint Change Log (v2.30 → **v2.45.0**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
 
 ---
 

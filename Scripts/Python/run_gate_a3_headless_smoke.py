@@ -9,7 +9,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "App"))
 
-from bank_statements import emit_gate_a3_smoke_evidence, run_azure_ocr_pipeline  # noqa: E402
+from bank_statements import (  # noqa: E402
+    emit_gate_a3_smoke_evidence,
+    post_process_bank_statement_df,
+    run_azure_ocr_pipeline,
+)
 
 _SMOKE_TMP = Path("/home/site/wwwroot/tmp")
 SMOKES = [
@@ -37,8 +41,19 @@ def main() -> int:
         df, logs, meta = run_azure_ocr_pipeline(
             pdf_bytes, pdf_name, client, logger, timeout_sec=600
         )
+        rules_info = (meta or {}).get("payee_rules_info")
+        if df is not None and not df.empty and not rules_info:
+            df, rules_info = post_process_bank_statement_df(
+                df, client, touch_last_used=False
+            )
         emit_gate_a3_smoke_evidence(
-            pdf_name, df, meta, logs, logger, client_name=client
+            pdf_name,
+            df,
+            meta,
+            logs,
+            logger,
+            client_name=client,
+            rules_info=rules_info,
         )
         status = meta.get("status")
         rows = len(df) if df is not None else 0

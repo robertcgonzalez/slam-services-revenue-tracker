@@ -134,6 +134,39 @@ PAYEE_RULES_COLUMNS: tuple[str, ...] = (
 
 PAYEE_RULES_FILENAME = "payee_rules.csv"
 
+# Canonical 25-pattern seed (v2.39 Change Log — single implementation; do not duplicate in docs).
+PAYEE_RULES_SEED_ROWS: tuple[dict[str, str], ...] = (
+    {"pattern": "WAL-MART", "clean_payee": "Walmart", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "WALMART", "clean_payee": "Walmart", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "WM SUPERCENTER", "clean_payee": "Walmart", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "AMAZON", "clean_payee": "Amazon", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "AMZN", "clean_payee": "Amazon", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "COSTCO", "clean_payee": "Costco", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "HOME DEPOT", "clean_payee": "Home Depot", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "LOWE'S", "clean_payee": "Lowe's", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "TARGET", "clean_payee": "Target", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "VENMO", "clean_payee": "Venmo", "suggested_category": "Transfers", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "ZELLE", "clean_payee": "Zelle", "suggested_category": "Transfers", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "PAYPAL", "clean_payee": "PayPal", "suggested_category": "Transfers", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "ACH DEPOSIT", "clean_payee": "ACH Deposit", "suggested_category": "Income", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "ACH DEBIT", "clean_payee": "ACH Payment", "suggested_category": "Expense", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "CHEVRON", "clean_payee": "Chevron", "suggested_category": "Auto & Fuel", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "SHELL", "clean_payee": "Shell", "suggested_category": "Auto & Fuel", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "EXXON", "clean_payee": "Exxon", "suggested_category": "Auto & Fuel", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "VERIZON", "clean_payee": "Verizon", "suggested_category": "Utilities", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "AT&T", "clean_payee": "AT&T", "suggested_category": "Utilities", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "COMCAST", "clean_payee": "Comcast", "suggested_category": "Utilities", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "SERVICE FEE", "clean_payee": "Bank Service Fee", "suggested_category": "Bank Fees", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "BANK FEE", "clean_payee": "Bank Service Fee", "suggested_category": "Bank Fees", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "INTEREST", "clean_payee": "Interest Earned", "suggested_category": "Income", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "INTUIT", "clean_payee": "Intuit", "suggested_category": "Software", "client_override": "", "notes": "", "last_used": ""},
+    {"pattern": "QUICKBOOKS", "clean_payee": "QuickBooks", "suggested_category": "Software", "client_override": "", "notes": "", "last_used": ""},
+)
+
+
+def _payee_rules_seed_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(list(PAYEE_RULES_SEED_ROWS), columns=list(PAYEE_RULES_COLUMNS))
+
 
 def _payee_rules_candidate_paths() -> list[Path]:
     """Locations where `payee_rules.csv` may live, in precedence order."""
@@ -163,7 +196,7 @@ def _payee_rules_candidate_paths() -> list[Path]:
 
 
 def resolve_payee_rules_path(create_if_missing: bool = False) -> Path | None:
-    """Return the first existing `payee_rules.csv`, optionally creating an empty seed file."""
+    """Return the first existing `payee_rules.csv`, optionally creating the v2.39 seed file."""
 
     candidates = _payee_rules_candidate_paths()
     for path in candidates:
@@ -179,13 +212,57 @@ def resolve_payee_rules_path(create_if_missing: bool = False) -> Path | None:
     for path in candidates:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists():
-                with path.open("w", encoding="utf-8", newline="") as fh:
-                    fh.write(",".join(PAYEE_RULES_COLUMNS) + "\n")
+            if not path.is_file():
+                _payee_rules_seed_dataframe().to_csv(path, index=False)
+            elif load_payee_rules(path).empty:
+                save_payee_rules(_payee_rules_seed_dataframe(), path)
             return path
         except OSError:
             continue
     return None
+
+
+def bootstrap_payee_rules_file(path: Path | None = None) -> Path | None:
+    """Ensure ``payee_rules.csv`` exists with the canonical seed when missing or header-only."""
+
+    if path is not None:
+        target = Path(path)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.is_file() or load_payee_rules(target).empty:
+                save_payee_rules(_payee_rules_seed_dataframe(), target)
+            return target
+        except OSError:
+            return None
+
+    target = resolve_payee_rules_path(create_if_missing=False)
+    if target and target.is_file() and not load_payee_rules(target).empty:
+        return target
+    target = resolve_payee_rules_path(create_if_missing=True)
+    if target and target.is_file() and load_payee_rules(target).empty:
+        save_payee_rules(_payee_rules_seed_dataframe(), target)
+    return target
+
+
+def post_process_bank_statement_df(
+    df: pd.DataFrame | None,
+    client_name: str | None = None,
+    *,
+    touch_last_used: bool = True,
+) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """Bootstrap payee rules on disk (when needed) and apply them to a transaction DataFrame."""
+
+    empty_info: dict[str, Any] = {
+        "rows_changed": 0,
+        "rules_used": 0,
+        "rules_total": 0,
+        "source_path": None,
+    }
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df, empty_info
+
+    bootstrap_payee_rules_file()
+    return apply_payee_rules(df, client_name, touch_last_used=touch_last_used)
 
 
 def load_payee_rules(path: Path | None = None) -> pd.DataFrame:
@@ -1565,12 +1642,14 @@ __all__ = [
     "LOCAL_ENHANCED_OCR_VERSION",
     "PAYEE_RULES_COLUMNS",
     "PAYEE_RULES_FILENAME",
+    "PAYEE_RULES_SEED_ROWS",
     "PIVOT_GROUP_BY_OPTIONS",
     "PIVOT_VALUE_KIND_OPTIONS",
     "RECONCILIATION_AMOUNT_TOLERANCE",
     "UPLOAD_WORK_DIR",
     "ZERO_TRANSACTIONS_MSG",
     "apply_payee_rules",
+    "bootstrap_payee_rules_file",
     "azure_ocr_configured",
     "azure_ocr_status",
     "build_grok_vision_prompt",
@@ -1586,6 +1665,7 @@ __all__ = [
     "hybrid_cv_status",
     "load_grok_vision_csv",
     "load_payee_rules",
+    "post_process_bank_statement_df",
     "local_enhanced_ocr_available",
     "missing_document_counts",
     "reconcile_statement_totals",
@@ -3079,6 +3159,23 @@ def _run_azure_ocr_via_document_intelligence(
                     "On free tiers expect partial results — consider a dedicated check resource for full crop coverage.",
                 )
             )
+
+        if df is not None and not df.empty:
+            df, rules_info = post_process_bank_statement_df(
+                df,
+                client_name,
+                touch_last_used=False,
+            )
+            meta["payee_rules_info"] = rules_info
+            if logger is not None and rules_info.get("rules_used"):
+                log_event(
+                    logger,
+                    "bank_stmt_payee_rules_applied",
+                    client=client_name,
+                    rows_changed=int(rules_info.get("rows_changed") or 0),
+                    rules_used=int(rules_info.get("rules_used") or 0),
+                    rules_total=int(rules_info.get("rules_total") or 0),
+                )
 
         if logger is not None:
             log_event(

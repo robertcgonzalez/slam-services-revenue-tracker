@@ -12,7 +12,9 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -276,6 +278,47 @@ def test_trim_supplemental_to_withdrawal_budget() -> None:
     assert sum(abs(float(r["SignedAmount"])) for r in trimmed) <= 1300.0
 
 
+def _run_payee_rules_sample_test(rules_path: Path) -> None:
+    prev = os.environ.get("SLAM_PAYEE_RULES_PATH")
+    os.environ["SLAM_PAYEE_RULES_PATH"] = str(rules_path)
+    try:
+        bs.bootstrap_payee_rules_file(rules_path)
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "2026-01-15",
+                    "Description": "POS PURCHASE WAL-MART STORE #1234",
+                    "Payee": "",
+                    "Amount": "50.00",
+                    "Category": "Uncategorized",
+                },
+                {
+                    "Date": "2026-01-16",
+                    "Description": "ACH DEBIT PAYROLL ACME",
+                    "Payee": "ACH DEBIT PAYROLL ACME",
+                    "Amount": "1200.00",
+                    "Category": "Uncategorized",
+                },
+            ]
+        )
+        rules = bs.load_payee_rules(rules_path)
+        out, info = bs.apply_payee_rules(df, client_name="Test Client", rules=rules)
+        assert info["rules_total"] == 25
+        assert info["rules_used"] >= 2, info
+        assert out.loc[0, "Payee"] == "Walmart"
+        assert out.loc[1, "Payee"] == "ACH Payment"
+    finally:
+        if prev is None:
+            os.environ.pop("SLAM_PAYEE_RULES_PATH", None)
+        else:
+            os.environ["SLAM_PAYEE_RULES_PATH"] = prev
+
+
+def test_payee_rules_fire_on_sample_descriptions(tmp_path) -> None:
+    """Canonical seed must load and match common Description substrings."""
+    _run_payee_rules_sample_test(tmp_path / "payee_rules.csv")
+
+
 def test_dedupe_azure_transactions_collapses_supplemental_amount_dupes() -> None:
     df = pd.DataFrame(
         [
@@ -306,6 +349,8 @@ def main() -> int:
     test_pick_best_checks_per_crop()
     test_trim_supplemental_to_withdrawal_budget()
     test_dedupe_azure_transactions_collapses_supplemental_amount_dupes()
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_payee_rules_sample_test(Path(tmp) / "payee_rules.csv")
     print("\n[OK] All Azure assembly regression checks passed.")
     return 0
 
