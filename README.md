@@ -40,7 +40,7 @@ python Scripts/health_check.py --full
 
 ---
 
-## Current Status (June 2026 — v2.45.4)
+## Current Status (June 2026 — v2.45.8)
 
 - **Laura/Stef pilot active (Path A)**; Gate A3 HCC PASS; **Auto Body Δ $273.45 owner-accepted** — human review via reconciliation banner + optional note (`QMS/State-Alignment/runs/2026-05-31-v2454-deploy-resmoke.md`).
 - **Deploy discipline:** after every `Deploy-ToAzure.ps1`, run Gate A3 headless smoke + evidence collection — see [`docs/deployment.md`](docs/deployment.md) (or `-RunGateA3Smoke`).

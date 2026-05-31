@@ -200,83 +200,132 @@ from diagnostics import (
 
 st.set_page_config(page_title="SLAM Services Revenue Tracker", layout="wide", page_icon="📊")
 
-APP_VERSION = "v2.45.7"
+APP_VERSION = "v2.45.8"
 LOGGER = setup_app_logging()
+
+_NAV_PAGE_LABELS = {
+    "Dashboard": "📊 Dashboard",
+    "Clients": "👥 Clients",
+    "Revenue Requests": "💰 Revenue Requests",
+    "Bank Statements": "🏦 Bank Statements",
+}
 
 SLAM_CSS = """
 <style>
-    .slam-header { font-size: 1.05rem; color: #1e3a5f; margin-bottom: 0.25rem; }
-    .slam-subtle { color: #5a6c7d; font-size: 0.9rem; }
-    .slam-action-card {
-        background: #fff8e6;
-        border-left: 4px solid #d97706;
-        padding: 0.75rem 1rem;
-        border-radius: 4px;
-        margin-bottom: 1rem;
+    :root {
+        --slam-navy: #1e3a5f;
+        --slam-navy-dark: #0f172a;
+        --slam-text: #334155;
+        --slam-text-muted: #475569;
+        --slam-warm-bg: #faf8f5;
+        --slam-warm-border: #e7e0d8;
+        --slam-accent: #c2410c;
+        --slam-radius: 12px;
+        --slam-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
     }
+    .slam-subtle { color: var(--slam-text-muted); font-size: 0.9rem; line-height: 1.5; }
     .slam-dashboard-hero {
-        background: linear-gradient(135deg, #fff7ed 0%, #fef9c3 45%, #f8fafc 100%);
-        border: 1px solid #fed7aa;
-        border-left: 5px solid #ea580c;
-        padding: 1.5rem 1.75rem;
-        border-radius: 12px;
-        margin-bottom: 1.75rem;
-        box-shadow: 0 2px 8px rgba(234, 88, 12, 0.08);
+        background: linear-gradient(135deg, #faf8f5 0%, #f5f0e8 55%, #f8fafc 100%);
+        border: 1px solid var(--slam-warm-border);
+        border-left: 5px solid var(--slam-accent);
+        padding: 1.6rem 1.85rem;
+        border-radius: var(--slam-radius);
+        margin-bottom: 1.25rem;
+        box-shadow: var(--slam-shadow);
     }
     .slam-dashboard-greeting {
         margin: 0;
-        color: #9a3412;
-        font-size: 1.85rem;
+        color: var(--slam-navy-dark);
+        font-size: 1.75rem;
         font-weight: 700;
-        line-height: 1.2;
+        line-height: 1.25;
         letter-spacing: -0.02em;
     }
-    .slam-dashboard-date {
-        margin: 0.5rem 0 0;
-        color: #78716c;
-        font-size: 0.95rem;
+    .slam-dashboard-tagline {
+        margin: 0.4rem 0 0;
+        color: var(--slam-text);
+        font-size: 0.98rem;
         font-weight: 500;
+        line-height: 1.45;
+    }
+    .slam-dashboard-date {
+        margin: 0.55rem 0 0;
+        color: var(--slam-text-muted);
+        font-size: 0.92rem;
+        font-weight: 600;
     }
     .slam-section-header {
-        color: #1e3a5f;
+        color: var(--slam-navy);
         font-size: 1.05rem;
         font-weight: 600;
         margin: 0 0 0.85rem 0;
         padding-bottom: 0.4rem;
         border-bottom: 1px solid #e2e8f0;
     }
-    .slam-main-card {
-        margin-bottom: 1.5rem;
+    .slam-page-header {
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .slam-page-header h2 {
+        margin: 0;
+        color: var(--slam-navy-dark);
+        font-size: 1.5rem;
+        font-weight: 700;
+        line-height: 1.3;
+    }
+    .slam-page-header p {
+        margin: 0.4rem 0 0;
+        color: var(--slam-text-muted);
+        font-size: 0.92rem;
+        line-height: 1.5;
     }
     .slam-priority-hero {
-        background: linear-gradient(135deg, #fff1f2 0%, #fff8e6 100%);
-        border: 2px solid #dc2626;
-        border-left: 6px solid #dc2626;
-        padding: 1.25rem 1.5rem;
-        border-radius: 12px;
+        background: #fff5f5;
+        border: 1px solid #fca5a5;
+        border-left: 6px solid #b91c1c;
+        padding: 1.35rem 1.55rem;
+        border-radius: var(--slam-radius);
         margin: 0 0 1.5rem 0;
-        box-shadow: 0 3px 12px rgba(220, 38, 38, 0.12);
+        box-shadow: var(--slam-shadow);
     }
     .slam-priority-hero h4 {
-        margin: 0 0 0.45rem 0;
-        color: #991b1b;
-        font-size: 1.25rem;
+        margin: 0 0 0.5rem 0;
+        color: #7f1d1d;
+        font-size: 1.2rem;
         font-weight: 700;
     }
-    .slam-priority-hero p { margin: 0; color: #7f1d1d; font-size: 0.95rem; line-height: 1.5; }
-    .slam-priority-caught-up {
-        background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
-        border: 2px solid #059669;
-        border-left: 6px solid #059669;
-        padding: 1.25rem 1.5rem;
-        border-radius: 12px;
-        margin: 0 0 1.5rem 0;
-        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.1);
+    .slam-priority-hero p {
+        margin: 0;
+        color: #450a0a;
+        font-size: 0.95rem;
+        line-height: 1.55;
     }
-    .slam-priority-caught-up strong { color: #065f46; font-size: 1.1rem; }
+    .slam-priority-hero strong { color: #450a0a; }
+    .slam-priority-caught-up {
+        background: #ecfdf5;
+        border: 1px solid #6ee7b7;
+        border-left: 6px solid #047857;
+        padding: 1.35rem 1.55rem;
+        border-radius: var(--slam-radius);
+        margin: 0 0 1.5rem 0;
+        box-shadow: var(--slam-shadow);
+    }
+    .slam-priority-caught-up strong {
+        color: #064e3b;
+        font-size: 1.12rem;
+        display: block;
+        margin-bottom: 0.35rem;
+    }
+    .slam-priority-caught-up span {
+        color: #14532d;
+        font-size: 0.95rem;
+        line-height: 1.55;
+        display: block;
+    }
     div[data-testid="stMetric"] {
         background: #ffffff;
-        padding: 0.75rem 0.85rem;
+        padding: 0.85rem 0.95rem;
         border-radius: 10px;
         border: 1px solid #e2e8f0;
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
@@ -286,40 +335,46 @@ SLAM_CSS = """
         align-items: center;
         justify-content: space-between;
         gap: 0.5rem;
-        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        background: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 8px;
-        padding: 0.45rem 0.65rem;
-        margin-bottom: 0.65rem;
+        padding: 0.5rem 0.7rem;
+        margin-bottom: 0.5rem;
     }
     .slam-sidebar-compact-name {
-        color: #1e3a5f;
-        font-size: 0.88rem;
+        color: var(--slam-navy-dark);
+        font-size: 0.9rem;
         font-weight: 700;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0;
     }
-    .slam-sidebar-compact-meta {
-        color: #64748b;
-        font-size: 0.75rem;
-        font-weight: 500;
+    .slam-status-pill {
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 0.2rem 0.45rem;
+        border-radius: 999px;
         white-space: nowrap;
         flex-shrink: 0;
     }
-    .slam-sidebar-compact-meta .warn { color: #dc2626; font-weight: 600; }
-    .slam-sidebar-compact-meta .ok { color: #059669; }
+    .slam-status-pill-ok {
+        background: #d1fae5;
+        color: #065f46;
+        border: 1px solid #6ee7b7;
+    }
+    .slam-status-pill-warn {
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fca5a5;
+    }
     .slam-sidebar-section-label {
-        color: #64748b;
+        color: #475569;
         font-size: 0.72rem;
-        font-weight: 600;
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.06em;
-        margin: 0.75rem 0 0.35rem;
-    }
-    .slam-sidebar-actions-wrap {
-        margin-top: 0.5rem;
-        padding-top: 0.25rem;
+        margin: 0.65rem 0 0.35rem;
     }
     .slam-login-header {
         text-align: center;
@@ -333,35 +388,38 @@ SLAM_CSS = """
     }
     .slam-login-header h2 {
         margin: 0;
-        color: #1e3a5f;
+        color: var(--slam-navy-dark);
         font-size: 1.65rem;
         font-weight: 700;
     }
     .slam-login-tagline {
-        color: #5a6c7d;
+        color: var(--slam-text-muted);
         font-size: 0.95rem;
         margin: 0.35rem 0 0;
     }
     .slam-login-note {
-        color: #64748b;
+        color: #334155;
         font-size: 0.85rem;
         text-align: center;
         margin: 0 0 1rem 0;
-        padding: 0.5rem 0.75rem;
-        background: #f1f5f9;
+        padding: 0.55rem 0.75rem;
+        background: #f8fafc;
         border-radius: 6px;
-        border-left: 3px solid #1e3a5f;
+        border-left: 3px solid var(--slam-navy);
     }
     section[data-testid="stSidebar"] .stExpander {
-        margin-bottom: 0.35rem;
+        margin-bottom: 0.4rem;
     }
     section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
-        gap: 0.35rem;
+        gap: 0.4rem;
+    }
+    section[data-testid="stSidebar"] {
+        padding-top: 0.75rem;
     }
     @media (max-width: 768px) {
-        .slam-dashboard-greeting { font-size: 1.45rem; }
-        .slam-dashboard-hero { padding: 1.15rem 1.25rem; margin-bottom: 1.25rem; }
-        .slam-priority-hero, .slam-priority-caught-up { padding: 1rem 1.15rem; }
+        .slam-dashboard-greeting { font-size: 1.4rem; }
+        .slam-dashboard-hero { padding: 1.2rem 1.3rem; margin-bottom: 1rem; }
+        .slam-priority-hero, .slam-priority-caught-up { padding: 1.05rem 1.15rem; }
     }
 </style>
 """
@@ -1092,8 +1150,8 @@ def render_todays_priority(req_df: pd.DataFrame) -> None:
     if overdue.empty:
         st.markdown(
             '<div class="slam-priority-caught-up">'
-            "<strong>Today's priority</strong><br>"
-            "All caught up — no overdue revenue requests need follow-up right now."
+            "<strong>Today's priority</strong>"
+            "<span>All caught up — no overdue revenue requests need follow-up right now.</span>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -1175,10 +1233,48 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
     st.markdown(
         f'<div class="slam-dashboard-hero">'
         f'<h2 class="slam-dashboard-greeting">{greeting}, {user}!</h2>'
+        f'<p class="slam-dashboard-tagline">Your revenue command center — check Today\'s priority below.</p>'
         f'<p class="slam-dashboard-date">{date_str}</p>'
         f"</div>",
         unsafe_allow_html=True,
     )
+
+    overdue_total = len(get_all_overdue(req_df))
+    if overdue_total:
+        qa1, qa2, qa3 = st.columns(3)
+    else:
+        qa1, qa2 = st.columns(2)
+        qa3 = None
+    with qa1:
+        if st.button(
+            "🏦 Process Bank Statement",
+            type="primary",
+            key="dash_qa_bank",
+            use_container_width=True,
+        ):
+            st.session_state["goto_page"] = "Bank Statements"
+            st.rerun()
+    with qa2:
+        if st.button("🔄 Refresh Data", key="dash_qa_reload", use_container_width=True):
+            if st.session_state.get("revenue_unsaved"):
+                st.error(
+                    "You have unsaved edits on Revenue Requests. Save or undo before reloading."
+                )
+            else:
+                log_event(LOGGER, "force_reload")
+                st.cache_data.clear()
+                st.session_state.pop("revenue_unsaved", None)
+                st.rerun()
+    if qa3 is not None:
+        with qa3:
+            if st.button(
+                f"🔴 View Overdue ({overdue_total})",
+                key="dash_qa_overdue",
+                use_container_width=True,
+            ):
+                st.session_state["filter_preset"] = "overdue"
+                st.rerun()
+    st.markdown("")
 
     render_todays_priority(req_df)
 
@@ -1261,7 +1357,11 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
 
 # --- Clients page with revenue aggregates + enriched info ---
 def clients_page(clients_df, req_df, filtered):
-    st.header("👥 Client Roster & Revenue Status")
+    st.markdown(
+        '<div class="slam-page-header"><h2>👥 Client Roster & Revenue Status</h2>'
+        "<p>Search and review client details with revenue aggregates.</p></div>",
+        unsafe_allow_html=True,
+    )
 
     search = st.text_input("Search clients", "")
     dfc = clients_df.copy()
@@ -1293,22 +1393,24 @@ def clients_page(clients_df, req_df, filtered):
         if st.session_state.get("last_filter_industry") not in [None, "All"]:
             merged = merged[merged["industry_category"] == st.session_state["last_filter_industry"]]
 
-    st.dataframe(
-        merged[
-            [
-                "Business Name",
-                "EIN",
-                "Entity Type",
-                "City State Zip",
-                "industry_category",
-                "Outstanding Amount",
-                "Total Requests",
-                "Most Recent Status",
-            ]
-        ],
-        width="stretch",
-        hide_index=True,
-    )
+    with st.container(border=True):
+        st.markdown('<p class="slam-section-header">Client roster</p>', unsafe_allow_html=True)
+        st.dataframe(
+            merged[
+                [
+                    "Business Name",
+                    "EIN",
+                    "Entity Type",
+                    "City State Zip",
+                    "industry_category",
+                    "Outstanding Amount",
+                    "Total Requests",
+                    "Most Recent Status",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
 
     if st.button("Export Filtered Clients CSV"):
         csv_buf = io.StringIO()
@@ -1322,7 +1424,11 @@ def clients_page(clients_df, req_df, filtered):
 
 # --- Revenue Requests page: advanced filtering, editable table, bulk + save ---
 def requests_page(req_df, clients_df, filtered_global):
-    st.header("💰 Revenue Requests — Live Editor")
+    st.markdown(
+        '<div class="slam-page-header"><h2>💰 Revenue Requests — Live Editor</h2>'
+        "<p>Update status, checkboxes, and notes — remember to Save when finished.</p></div>",
+        unsafe_allow_html=True,
+    )
 
     # Additional client-side search on top of global filters
     search_term = st.text_input("Search client name or notes", "")
@@ -2275,11 +2381,10 @@ def _mode_suffix(mode: str | None) -> str:
 
 def bank_statements_page(clients_df: pd.DataFrame, req_df: pd.DataFrame) -> None:
     """Core Workstream #2 MVP — upload PDF, Azure Document Intelligence OCR, review, mark received."""
-    st.header("🏦 Bank Statements")
     st.markdown(
-        '<p class="slam-subtle">Upload a client bank statement PDF, run <strong>Process Statement</strong> '
-        "(Azure Document Intelligence — the sole OCR engine), review transactions, then mark the "
-        "matching revenue request as received.</p>",
+        '<div class="slam-page-header"><h2>🏦 Bank Statements</h2>'
+        "<p>Upload a PDF, run Process Statement (Azure Document Intelligence), review transactions, "
+        "then mark the matching revenue request as received.</p></div>",
         unsafe_allow_html=True,
     )
 
@@ -2896,19 +3001,16 @@ def _sidebar_overdue_count(req_df: pd.DataFrame) -> int:
 
 
 def render_sidebar_header(req_df: pd.DataFrame) -> None:
-    """Top sidebar: compact signed-in user + one-line operational status."""
+    """Top sidebar: compact signed-in user + status pill."""
     user = get_app_user()
-    mode_short = "PostgreSQL" if DATA_SOURCE == "postgresql" else "CSV"
     overdue = _sidebar_overdue_count(req_df)
     if overdue:
-        meta_html = f'{mode_short} · <span class="warn">{overdue} overdue</span>'
+        pill = f'<span class="slam-status-pill slam-status-pill-warn">{overdue} overdue</span>'
     else:
-        meta_html = f'{mode_short} · <span class="ok">All clear</span>'
+        pill = '<span class="slam-status-pill slam-status-pill-ok">All clear</span>'
     st.sidebar.markdown(
         f'<div class="slam-sidebar-compact">'
-        f'<span class="slam-sidebar-compact-name">{user}</span>'
-        f'<span class="slam-sidebar-compact-meta">{meta_html}</span>'
-        f"</div>",
+        f'<span class="slam-sidebar-compact-name">{user}</span>{pill}</div>',
         unsafe_allow_html=True,
     )
     if st.session_state.get("last_save_message"):
@@ -2952,7 +3054,14 @@ def render_sidebar_workflow() -> None:
 def render_sidebar_system_qms() -> None:
     """Collapsed system diagnostics + QMS baseline."""
     info = get_app_info(app_version=APP_VERSION, data_source=DATA_SOURCE, use_postgres=USE_POSTGRES)
-    with st.sidebar.expander("⚙️ System & QMS", expanded=False):
+    expand_system = (
+        DB_HEALTH != "ok"
+        or not HAS_CUSTOM_PASSWORD
+        or not get_data_freshness(data_source=DATA_SOURCE, data_path=DATA_PATH).get("available")
+        or not azure_ocr_status().get("configured")
+        or get_qms_status(data_path=DATA_PATH).get("summary") != "healthy"
+    )
+    with st.sidebar.expander("⚙️ System & QMS", expanded=expand_system):
         st.caption(f"Version **{info['version']}** · **{info['data_source']}** · `{info['host']}`")
         if info["custom_password"]:
             st.caption("✅ Production password configured")
@@ -3118,21 +3227,26 @@ def main():
         st.stop()
 
     render_sidebar_header(req_df)
-    render_sidebar_data_health(len(clients_df), len(req_df))
-
-    filters = render_global_filters(req_df)
-    st.session_state["last_filter_industry"] = filters["industry"]
-
-    filtered = apply_filters(req_df, clients_df, filters)
 
     st.sidebar.markdown('<p class="slam-sidebar-section-label">Pages</p>', unsafe_allow_html=True)
-    _nav_pages = ["Dashboard", "Clients", "Revenue Requests", "Bank Statements"]
+    _nav_pages = list(_NAV_PAGE_LABELS.keys())
     if st.session_state.get("goto_page") in _nav_pages:
         st.session_state["nav_page"] = st.session_state.pop("goto_page")
     if st.session_state.get("nav_page") not in _nav_pages:
         st.session_state["nav_page"] = "Dashboard"
-    page = st.sidebar.radio("Go to", _nav_pages, key="nav_page", label_visibility="collapsed")
+    page = st.sidebar.radio(
+        "Go to",
+        _nav_pages,
+        format_func=lambda p: _NAV_PAGE_LABELS[p],
+        key="nav_page",
+        label_visibility="collapsed",
+    )
 
+    filters = render_global_filters(req_df)
+    st.session_state["last_filter_industry"] = filters["industry"]
+    filtered = apply_filters(req_df, clients_df, filters)
+
+    render_sidebar_data_health(len(clients_df), len(req_df))
     render_sidebar_workflow()
     render_sidebar_system_qms()
 
