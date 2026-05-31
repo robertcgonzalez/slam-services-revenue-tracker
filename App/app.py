@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from app_logging import is_smoke_assessment_pdf, log_event, setup_app_logging
+from app_logging import log_event, setup_app_logging
 
 try:
     from bank_statements import (
@@ -16,10 +16,10 @@ try:
         ZERO_TRANSACTIONS_MSG,
         apply_payee_rules,
         azure_ocr_status,
-        emit_gate_a3_smoke_evidence,
         build_grok_vision_prompt,
         build_statement_pivot,
         count_pattern_matches,
+        emit_gate_a3_smoke_evidence,
         filter_transactions_by_confidence,
         format_processing_log,
         hybrid_cv_status,
@@ -1395,13 +1395,20 @@ def _render_grok_vision_section(selected_client: str) -> None:
             # Convenience button to re-organize (useful after code changes or on old folders)
             if cropped_count > 0 and cropped_dir:
                 with st.expander("Organize crops (checks vs deposits)", expanded=False):
-                    st.caption("Moves images into clean `checks/` and `deposits/` subfolders based on current classification rules.")
+                    st.caption(
+                        "Moves images into clean `checks/` and `deposits/` subfolders based on current classification rules."
+                    )
                     if st.button("Re-organize now", key="reorg_crops_btn"):
                         try:
                             import subprocess
                             import sys
                             from pathlib import Path as _P
-                            script = _P(__file__).parent.parent / "Scripts" / "reorganize_cropped_checks.py"
+
+                            script = (
+                                _P(__file__).parent.parent
+                                / "Scripts"
+                                / "reorganize_cropped_checks.py"
+                            )
                             if script.exists():
                                 result = subprocess.run(
                                     [sys.executable, str(script), "--crop-dir", cropped_dir],
@@ -2404,219 +2411,200 @@ def _run_bank_statement_azure_process(
     selected_client: str,
     ocr_status: dict,
 ) -> None:
-            all_logs: list[str] = []
-            last_df: pd.DataFrame | None = None
-            last_csv: Path | None = None
+    all_logs: list[str] = []
+    last_df: pd.DataFrame | None = None
+    last_csv: Path | None = None
+    last_status = "error"
+    cropper_msg: str | None = None
+    last_meta: dict = {}
+    last_pdf_name: str = ""
+    last_grok_totals: dict | None = None
+    smoke_evidence_files: list[str] = []
+
+    # Azure Document Intelligence (via Function or direct DI) is the *only* OCR path.
+    # No local image processing, no EasyOCR, no pdfplumber fallback for bank statements.
+    if not ocr_status.get("configured"):
+        st.error(
+            "Azure OCR is not configured. This is the only supported workflow for bank statements. "
+            "Set `AZURE_OCR_FUNCTION_URL` and `AZURE_OCR_FUNCTION_KEY` (App Settings or .env) and reload."
+        )
+        log_event(LOGGER, "bank_stmt_azure_not_configured_block", client=selected_client)
+        st.stop()
+
+    run_mode = "azure_ocr"
+
+    for up in uploaded:
+        all_logs.append(f"========== {up.name} ==========")
+        log_event(
+            LOGGER,
+            "bank_stmt_process_start",
+            client=selected_client,
+            file=up.name,
+            mode=run_mode,
+        )
+
+        df_ocr, logs_ocr, meta_ocr = run_azure_ocr_pipeline(
+            up.getvalue(),
+            up.name,
+            selected_client,
+            LOGGER,
+        )
+        all_logs.extend(logs_ocr)
+        df = df_ocr
+        meta = {
+            "status": meta_ocr.get("status", "partial"),
+            "csv_path": meta_ocr.get("csv_path"),
+            "pdf_path": meta_ocr.get("pdf_path"),
+            "cropper_skipped": meta_ocr.get("cropper_skipped", True),
+            "cropper_user_message": meta_ocr.get("cropper_user_message"),
+            "raw_text": meta_ocr.get("raw_text", ""),
+            "text_layer_found": bool(meta_ocr.get("text_layer_found", False)),
+            "cropped_dir": meta_ocr.get("cropped_dir"),
+            "cropped_check_count": int(
+                meta_ocr.get("azure_check_count") or meta_ocr.get("cropped_check_count") or 0
+            ),
+            "azure_check_count": int(meta_ocr.get("azure_check_count") or 0),
+            "azure_check_payees_merged": int(meta_ocr.get("azure_check_payees_merged") or 0),
+            "transaction_count": (int(len(df)) if df is not None and not df.empty else 0),
+            "grok_totals": meta_ocr.get("grok_totals"),
+            "statement_summary": meta_ocr.get("statement_summary"),
+            "azure_ocr_meta": meta_ocr,
+        }
+        if meta_ocr.get("grok_totals"):
+            last_grok_totals = meta_ocr["grok_totals"]
+        if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+            all_logs.append(
+                "[WARN] Azure Document Intelligence returned no transactions for this file — "
+                "use Prepare for Grok Vision below if the PDF is scanned."
+            )
+
+        file_rules_info: dict | None = None
+        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+            try:
+                df, file_rules_info = apply_payee_rules(df, client_name=selected_client)
+                if file_rules_info and file_rules_info.get("rows_changed", 0) > 0:
+                    all_logs.append(
+                        f"[INFO] Payee rules engine ({up.name}): "
+                        f"{file_rules_info['rows_changed']} row(s) via "
+                        f"{file_rules_info['rules_used']} rule(s)."
+                    )
+            except Exception as exc:
+                all_logs.append(f"[WARN] Payee rules skipped for {up.name}: {exc}")
+
+        ocr_meta_full = meta_ocr if isinstance(meta_ocr, dict) else {}
+        if emit_gate_a3_smoke_evidence(
+            up.name,
+            df,
+            ocr_meta_full,
+            logs_ocr,
+            LOGGER,
+            rules_info=file_rules_info,
+            client_name=selected_client,
+        ):
+            smoke_evidence_files.append(up.name)
+            all_logs.append("[INFO] Validation evidence emitted to logs (Gate A3 collector).")
+
+        last_meta = meta
+        last_pdf_name = up.name
+        if meta.get("cropper_user_message"):
+            cropper_msg = meta["cropper_user_message"]
+        if df is not None:
+            last_df = df
+            last_csv = meta.get("csv_path")
+            last_status = meta.get("status", "success")
+        elif last_status != "partial":
             last_status = "error"
-            cropper_msg: str | None = None
-            last_meta: dict = {}
-            last_pdf_name: str = ""
-            last_grok_totals: dict | None = None
-            smoke_evidence_files: list[str] = []
+    rules_info: dict | None = None
+    if last_df is not None and not last_df.empty:
+        log_event(
+            LOGGER,
+            "bank_stmt_payee_rules_applied",
+            client=selected_client,
+            source="azure_ocr",
+            files=len(uploaded),
+        )
 
-            # Azure Document Intelligence (via Function or direct DI) is the *only* OCR path.
-            # No local image processing, no EasyOCR, no pdfplumber fallback for bank statements.
-            if not ocr_status.get("configured"):
-                st.error(
-                    "Azure OCR is not configured. This is the only supported workflow for bank statements. "
-                    "Set `AZURE_OCR_FUNCTION_URL` and `AZURE_OCR_FUNCTION_KEY` (App Settings or .env) and reload."
-                )
-                log_event(LOGGER, "bank_stmt_azure_not_configured_block", client=selected_client)
-                st.stop()
-
-            run_mode = "azure_ocr"
-
-            for up in uploaded:
-                all_logs.append(f"========== {up.name} ==========")
-                log_event(
-                    LOGGER,
-                    "bank_stmt_process_start",
-                    client=selected_client,
-                    file=up.name,
-                    mode=run_mode,
-                )
-
-                df_ocr, logs_ocr, meta_ocr = run_azure_ocr_pipeline(
-                    up.getvalue(),
-                    up.name,
-                    selected_client,
-                    LOGGER,
-                )
-                all_logs.extend(logs_ocr)
-                df = df_ocr
-                meta = {
-                    "status": meta_ocr.get("status", "partial"),
-                    "csv_path": meta_ocr.get("csv_path"),
-                    "pdf_path": meta_ocr.get("pdf_path"),
-                    "cropper_skipped": meta_ocr.get("cropper_skipped", True),
-                    "cropper_user_message": meta_ocr.get("cropper_user_message"),
-                    "raw_text": meta_ocr.get("raw_text", ""),
-                    "text_layer_found": bool(meta_ocr.get("text_layer_found", False)),
-                    "cropped_dir": meta_ocr.get("cropped_dir"),
-                    "cropped_check_count": int(
-                        meta_ocr.get("azure_check_count")
-                        or meta_ocr.get("cropped_check_count")
-                        or 0
-                    ),
-                    "azure_check_count": int(meta_ocr.get("azure_check_count") or 0),
-                    "azure_check_payees_merged": int(
-                        meta_ocr.get("azure_check_payees_merged") or 0
-                    ),
-                    "transaction_count": (
-                        int(len(df)) if df is not None and not df.empty else 0
-                    ),
-                    "grok_totals": meta_ocr.get("grok_totals"),
-                    "statement_summary": meta_ocr.get("statement_summary"),
-                    "azure_ocr_meta": meta_ocr,
-                }
-                if meta_ocr.get("grok_totals"):
-                    last_grok_totals = meta_ocr["grok_totals"]
-                if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-                    all_logs.append(
-                        "[WARN] Azure Document Intelligence returned no transactions for this file — "
-                        "use Prepare for Grok Vision below if the PDF is scanned."
-                    )
-
-                file_rules_info: dict | None = None
-                if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-                    try:
-                        df, file_rules_info = apply_payee_rules(
-                            df, client_name=selected_client
-                        )
-                        if file_rules_info and file_rules_info.get("rows_changed", 0) > 0:
-                            all_logs.append(
-                                f"[INFO] Payee rules engine ({up.name}): "
-                                f"{file_rules_info['rows_changed']} row(s) via "
-                                f"{file_rules_info['rules_used']} rule(s)."
-                            )
-                    except Exception as exc:
-                        all_logs.append(f"[WARN] Payee rules skipped for {up.name}: {exc}")
-
-                ocr_meta_full = meta_ocr if isinstance(meta_ocr, dict) else {}
-                if emit_gate_a3_smoke_evidence(
-                    up.name,
-                    df,
-                    ocr_meta_full,
-                    logs_ocr,
-                    LOGGER,
-                    rules_info=file_rules_info,
-                    client_name=selected_client,
-                ):
-                    smoke_evidence_files.append(up.name)
-                    all_logs.append(
-                        "[INFO] Validation evidence emitted to logs (Gate A3 collector)."
-                    )
-
-                last_meta = meta
-                last_pdf_name = up.name
-                if meta.get("cropper_user_message"):
-                    cropper_msg = meta["cropper_user_message"]
-                if df is not None:
-                    last_df = df
-                    last_csv = meta.get("csv_path")
-                    last_status = meta.get("status", "success")
-                elif last_status != "partial":
-                    last_status = "error"
-            rules_info: dict | None = None
-            if last_df is not None and not last_df.empty:
-                log_event(
-                    LOGGER,
-                    "bank_stmt_payee_rules_applied",
-                    client=selected_client,
-                    source="azure_ocr",
-                    files=len(uploaded),
-                )
-
-            st.session_state["bank_stmt_smoke_evidence_files"] = smoke_evidence_files
-            st.session_state["bank_stmt_logs"] = format_processing_log(all_logs)
-            st.session_state["bank_stmt_txn_df"] = last_df
-            st.session_state["bank_stmt_csv_path"] = str(last_csv) if last_csv else None
-            st.session_state["bank_stmt_pipeline_status"] = last_status
-            st.session_state["bank_stmt_cropper_msg"] = cropper_msg
-            st.session_state["bank_stmt_raw_text"] = last_meta.get("raw_text", "")
-            st.session_state["bank_stmt_pdf_name"] = last_pdf_name
-            st.session_state["bank_stmt_pdf_path"] = (
-                str(last_meta.get("pdf_path")) if last_meta.get("pdf_path") else None
+    st.session_state["bank_stmt_smoke_evidence_files"] = smoke_evidence_files
+    st.session_state["bank_stmt_logs"] = format_processing_log(all_logs)
+    st.session_state["bank_stmt_txn_df"] = last_df
+    st.session_state["bank_stmt_csv_path"] = str(last_csv) if last_csv else None
+    st.session_state["bank_stmt_pipeline_status"] = last_status
+    st.session_state["bank_stmt_cropper_msg"] = cropper_msg
+    st.session_state["bank_stmt_raw_text"] = last_meta.get("raw_text", "")
+    st.session_state["bank_stmt_pdf_name"] = last_pdf_name
+    st.session_state["bank_stmt_pdf_path"] = (
+        str(last_meta.get("pdf_path")) if last_meta.get("pdf_path") else None
+    )
+    st.session_state["bank_stmt_cropped_dir"] = (
+        str(last_meta.get("cropped_dir")) if last_meta.get("cropped_dir") else None
+    )
+    st.session_state["bank_stmt_cropped_count"] = int(last_meta.get("cropped_check_count") or 0)
+    # New breakdown for checks vs deposit slips (available on paid-tier cropping runs)
+    st.session_state["bank_stmt_cropped_checks"] = int(last_meta.get("cropped_likely_checks") or 0)
+    st.session_state["bank_stmt_cropped_deposits"] = int(
+        last_meta.get("cropped_likely_deposits") or 0
+    )
+    st.session_state["bank_stmt_text_layer"] = bool(last_meta.get("text_layer_found", False))
+    st.session_state["bank_stmt_rules_info"] = rules_info
+    # Azure OCR may return grok_totals for reconciliation; Grok CSV paste supplies its own.
+    st.session_state["bank_stmt_grok_totals"] = last_grok_totals
+    st.session_state["bank_stmt_statement_summary"] = last_meta.get("statement_summary") or (
+        last_meta.get("azure_ocr_meta") or {}
+    ).get("statement_summary")
+    st.session_state["bank_stmt_last_mode"] = run_mode
+    st.session_state["bank_stmt_azure_ocr_meta"] = (
+        last_meta.get("azure_ocr_meta") if isinstance(last_meta, dict) else None
+    )
+    st.session_state["bank_stmt_azure_check_count"] = int(last_meta.get("azure_check_count") or 0)
+    _ocr_full = last_meta.get("azure_ocr_meta")
+    _checks_list = last_meta.get("azure_checks")
+    if not isinstance(_checks_list, list) and isinstance(_ocr_full, dict):
+        _checks_list = _ocr_full.get("azure_checks")
+    st.session_state["bank_stmt_azure_checks"] = (
+        _checks_list if isinstance(_checks_list, list) else []
+    )
+    st.session_state.pop("bank_stmt_needs_review", None)
+    st.session_state.pop("bank_stmt_reconciliation", None)
+    if last_df is not None:
+        row_count = len(last_df)
+        if row_count == 0:
+            st.warning(ZERO_TRANSACTIONS_MSG)
+            st.info(GROK_VISION_HINT)
+        elif last_status == "partial":
+            via = _mode_suffix(st.session_state.get("bank_stmt_last_mode"))
+            st.warning(
+                f"Partial success: {row_count} transactions extracted{via} from "
+                f"{len(uploaded)} file(s). See processing log for details."
             )
-            st.session_state["bank_stmt_cropped_dir"] = (
-                str(last_meta.get("cropped_dir")) if last_meta.get("cropped_dir") else None
+        else:
+            via = _mode_suffix(st.session_state.get("bank_stmt_last_mode"))
+            st.success(
+                f"Success: extracted {row_count} transactions{via} from {len(uploaded)} file(s)."
             )
-            st.session_state["bank_stmt_cropped_count"] = int(
-                last_meta.get("cropped_check_count") or 0
+        if last_csv:
+            st.info(f"Output CSV: `{last_csv}`")
+        if cropper_msg:
+            st.info(cropper_msg)
+        if rules_info and rules_info.get("rows_changed", 0) > 0:
+            st.success(
+                f"🧠 **{rules_info['rows_changed']} payee mapping(s) applied** "
+                f"via {rules_info['rules_used']} rule(s) "
+                f"(of {rules_info['rules_total']} loaded from "
+                "`Data/payee_rules.csv`)."
             )
-            # New breakdown for checks vs deposit slips (available on paid-tier cropping runs)
-            st.session_state["bank_stmt_cropped_checks"] = int(
-                last_meta.get("cropped_likely_checks") or 0
-            )
-            st.session_state["bank_stmt_cropped_deposits"] = int(
-                last_meta.get("cropped_likely_deposits") or 0
-            )
-            st.session_state["bank_stmt_text_layer"] = bool(
-                last_meta.get("text_layer_found", False)
-            )
-            st.session_state["bank_stmt_rules_info"] = rules_info
-            # Azure OCR may return grok_totals for reconciliation; Grok CSV paste supplies its own.
-            st.session_state["bank_stmt_grok_totals"] = last_grok_totals
-            st.session_state["bank_stmt_statement_summary"] = (
-                last_meta.get("statement_summary")
-                or (last_meta.get("azure_ocr_meta") or {}).get("statement_summary")
-            )
-            st.session_state["bank_stmt_last_mode"] = run_mode
-            st.session_state["bank_stmt_azure_ocr_meta"] = (
-                last_meta.get("azure_ocr_meta") if isinstance(last_meta, dict) else None
-            )
-            st.session_state["bank_stmt_azure_check_count"] = int(
-                last_meta.get("azure_check_count") or 0
-            )
-            _ocr_full = last_meta.get("azure_ocr_meta")
-            _checks_list = last_meta.get("azure_checks")
-            if not isinstance(_checks_list, list) and isinstance(_ocr_full, dict):
-                _checks_list = _ocr_full.get("azure_checks")
-            st.session_state["bank_stmt_azure_checks"] = (
-                _checks_list if isinstance(_checks_list, list) else []
-            )
-            st.session_state.pop("bank_stmt_needs_review", None)
-            st.session_state.pop("bank_stmt_reconciliation", None)
-            if last_df is not None:
-                row_count = len(last_df)
-                if row_count == 0:
-                    st.warning(ZERO_TRANSACTIONS_MSG)
-                    st.info(GROK_VISION_HINT)
-                elif last_status == "partial":
-                    via = _mode_suffix(st.session_state.get("bank_stmt_last_mode"))
-                    st.warning(
-                        f"Partial success: {row_count} transactions extracted{via} from "
-                        f"{len(uploaded)} file(s). See processing log for details."
-                    )
-                else:
-                    via = _mode_suffix(st.session_state.get("bank_stmt_last_mode"))
-                    st.success(
-                        f"Success: extracted {row_count} transactions{via} from {len(uploaded)} file(s)."
-                    )
-                if last_csv:
-                    st.info(f"Output CSV: `{last_csv}`")
-                if cropper_msg:
-                    st.info(cropper_msg)
-                if rules_info and rules_info.get("rows_changed", 0) > 0:
-                    st.success(
-                        f"🧠 **{rules_info['rows_changed']} payee mapping(s) applied** "
-                        f"via {rules_info['rules_used']} rule(s) "
-                        f"(of {rules_info['rules_total']} loaded from "
-                        "`Data/payee_rules.csv`)."
-                    )
-                log_event(
-                    LOGGER,
-                    "bank_stmt_process_done",
-                    client=selected_client,
-                    rows=len(last_df),
-                    status=last_status,
-                )
-            else:
-                st.error(
-                    "Processing failed — no transaction CSV was produced. "
-                    "See the processing log below for details."
-                )
-                log_event(LOGGER, "bank_stmt_process_failed", client=selected_client)
+        log_event(
+            LOGGER,
+            "bank_stmt_process_done",
+            client=selected_client,
+            rows=len(last_df),
+            status=last_status,
+        )
+    else:
+        st.error(
+            "Processing failed — no transaction CSV was produced. "
+            "See the processing log below for details."
+        )
+        log_event(LOGGER, "bank_stmt_process_failed", client=selected_client)
 
 
 def _render_azure_check_summary() -> None:

@@ -256,9 +256,24 @@ def test_duplicate_check_number_keeps_median_nearest() -> None:
 
 def test_pick_best_checks_per_crop() -> None:
     checks = [
-        {"crop_file": "check_P05C00.png", "amount": 280.0, "check_number": "501", "pay_to": "Vendor"},
-        {"crop_file": "check_P05C00.png", "amount": 6904.99, "check_number": "501", "pay_to": "Vendor OCR"},
-        {"crop_file": "check_P05C01.png", "amount": 150.0, "check_number": "502", "pay_to": "Other"},
+        {
+            "crop_file": "check_P05C00.png",
+            "amount": 280.0,
+            "check_number": "501",
+            "pay_to": "Vendor",
+        },
+        {
+            "crop_file": "check_P05C00.png",
+            "amount": 6904.99,
+            "check_number": "501",
+            "pay_to": "Vendor OCR",
+        },
+        {
+            "crop_file": "check_P05C01.png",
+            "amount": 150.0,
+            "check_number": "502",
+            "pay_to": "Other",
+        },
     ]
     picked = adi._pick_best_checks_per_crop(checks)
     assert len(picked) == 2
@@ -281,7 +296,9 @@ def test_trim_supplemental_to_withdrawal_budget() -> None:
 def test_trim_keeps_all_rows_when_under_budget_despite_row_cap() -> None:
     """Auto Body regression: do not cap row count while supplemental total is under budget."""
 
-    supplemental = [_check_row(f"Check {i}", 200.0 + i, check_number=str(1000 + i)) for i in range(50)]
+    supplemental = [
+        _check_row(f"Check {i}", 200.0 + i, check_number=str(1000 + i)) for i in range(50)
+    ]
     trimmed, dropped = bs._trim_supplemental_to_withdrawal_budget(
         supplemental,
         41403.63,
@@ -335,9 +352,7 @@ def test_auto_body_withdrawal_residual_scenario() -> None:
         }
         for i in range(43)
     )
-    supplemental = [
-        _check_row(f"Imaging check {i}", 822.6036 + (i - 25) * 0.01) for i in range(50)
-    ]
+    supplemental = [_check_row(f"Imaging check {i}", 822.6036 + (i - 25) * 0.01) for i in range(50)]
 
     register_kept = bs._prune_register_for_supplemental(
         register,
@@ -374,7 +389,9 @@ def test_reconciliation_reference_from_statement_summary() -> None:
 
 def test_iqr_outlier_rejects_memo_bleed_not_valid_checks() -> None:
     register = [_register_row("Tabular", 50.0) for _ in range(44)]
-    checks = [_check_row(f"Vendor {i}", 250.0 + i * 3, check_number=str(2000 + i)) for i in range(45)]
+    checks = [
+        _check_row(f"Vendor {i}", 250.0 + i * 3, check_number=str(2000 + i)) for i in range(45)
+    ]
     checks.append(_check_row("Memo OCR bleed", 52_500.00))
     checks.append(_check_row("Valid large", 4995.71, check_number="2099"))
 

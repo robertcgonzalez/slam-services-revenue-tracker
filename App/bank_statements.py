@@ -105,7 +105,7 @@ GROK_CSV_COLUMNS: tuple[str, ...] = (
     "Confidence",
     "NeedsReview",
     "ReviewReason",
-    "Source",   # register vs check_image_crop provenance (added for imaging leg clarity)
+    "Source",  # register vs check_image_crop provenance (added for imaging leg clarity)
 )
 
 # Minimum columns Grok must produce for us to consider the paste/upload valid.
@@ -136,31 +136,206 @@ PAYEE_RULES_FILENAME = "payee_rules.csv"
 
 # Canonical 25-pattern seed (v2.39 Change Log — single implementation; do not duplicate in docs).
 PAYEE_RULES_SEED_ROWS: tuple[dict[str, str], ...] = (
-    {"pattern": "WAL-MART", "clean_payee": "Walmart", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "WALMART", "clean_payee": "Walmart", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "WM SUPERCENTER", "clean_payee": "Walmart", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "AMAZON", "clean_payee": "Amazon", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "AMZN", "clean_payee": "Amazon", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "COSTCO", "clean_payee": "Costco", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "HOME DEPOT", "clean_payee": "Home Depot", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "LOWE'S", "clean_payee": "Lowe's", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "TARGET", "clean_payee": "Target", "suggested_category": "Supplies", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "VENMO", "clean_payee": "Venmo", "suggested_category": "Transfers", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "ZELLE", "clean_payee": "Zelle", "suggested_category": "Transfers", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "PAYPAL", "clean_payee": "PayPal", "suggested_category": "Transfers", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "ACH DEPOSIT", "clean_payee": "ACH Deposit", "suggested_category": "Income", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "ACH DEBIT", "clean_payee": "ACH Payment", "suggested_category": "Expense", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "CHEVRON", "clean_payee": "Chevron", "suggested_category": "Auto & Fuel", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "SHELL", "clean_payee": "Shell", "suggested_category": "Auto & Fuel", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "EXXON", "clean_payee": "Exxon", "suggested_category": "Auto & Fuel", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "VERIZON", "clean_payee": "Verizon", "suggested_category": "Utilities", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "AT&T", "clean_payee": "AT&T", "suggested_category": "Utilities", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "COMCAST", "clean_payee": "Comcast", "suggested_category": "Utilities", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "SERVICE FEE", "clean_payee": "Bank Service Fee", "suggested_category": "Bank Fees", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "BANK FEE", "clean_payee": "Bank Service Fee", "suggested_category": "Bank Fees", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "INTEREST", "clean_payee": "Interest Earned", "suggested_category": "Income", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "INTUIT", "clean_payee": "Intuit", "suggested_category": "Software", "client_override": "", "notes": "", "last_used": ""},
-    {"pattern": "QUICKBOOKS", "clean_payee": "QuickBooks", "suggested_category": "Software", "client_override": "", "notes": "", "last_used": ""},
+    {
+        "pattern": "WAL-MART",
+        "clean_payee": "Walmart",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "WALMART",
+        "clean_payee": "Walmart",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "WM SUPERCENTER",
+        "clean_payee": "Walmart",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "AMAZON",
+        "clean_payee": "Amazon",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "AMZN",
+        "clean_payee": "Amazon",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "COSTCO",
+        "clean_payee": "Costco",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "HOME DEPOT",
+        "clean_payee": "Home Depot",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "LOWE'S",
+        "clean_payee": "Lowe's",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "TARGET",
+        "clean_payee": "Target",
+        "suggested_category": "Supplies",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "VENMO",
+        "clean_payee": "Venmo",
+        "suggested_category": "Transfers",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "ZELLE",
+        "clean_payee": "Zelle",
+        "suggested_category": "Transfers",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "PAYPAL",
+        "clean_payee": "PayPal",
+        "suggested_category": "Transfers",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "ACH DEPOSIT",
+        "clean_payee": "ACH Deposit",
+        "suggested_category": "Income",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "ACH DEBIT",
+        "clean_payee": "ACH Payment",
+        "suggested_category": "Expense",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "CHEVRON",
+        "clean_payee": "Chevron",
+        "suggested_category": "Auto & Fuel",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "SHELL",
+        "clean_payee": "Shell",
+        "suggested_category": "Auto & Fuel",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "EXXON",
+        "clean_payee": "Exxon",
+        "suggested_category": "Auto & Fuel",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "VERIZON",
+        "clean_payee": "Verizon",
+        "suggested_category": "Utilities",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "AT&T",
+        "clean_payee": "AT&T",
+        "suggested_category": "Utilities",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "COMCAST",
+        "clean_payee": "Comcast",
+        "suggested_category": "Utilities",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "SERVICE FEE",
+        "clean_payee": "Bank Service Fee",
+        "suggested_category": "Bank Fees",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "BANK FEE",
+        "clean_payee": "Bank Service Fee",
+        "suggested_category": "Bank Fees",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "INTEREST",
+        "clean_payee": "Interest Earned",
+        "suggested_category": "Income",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "INTUIT",
+        "clean_payee": "Intuit",
+        "suggested_category": "Software",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
+    {
+        "pattern": "QUICKBOOKS",
+        "clean_payee": "QuickBooks",
+        "suggested_category": "Software",
+        "client_override": "",
+        "notes": "",
+        "last_used": "",
+    },
 )
 
 
@@ -1090,11 +1265,9 @@ def run_check_cropper_only(
 
                 if crop.get("likely_deposit_slip"):
                     dst = deposits_dir / f"check_{check_id}.png"
-                    target_dir = deposits_dir
                     moved_deposits += 1
                 else:
                     dst = checks_dir / f"check_{check_id}.png"
-                    target_dir = checks_dir
                     moved_checks += 1
 
                 try:
@@ -1118,10 +1291,18 @@ def run_check_cropper_only(
                     import subprocess
                     import sys
                     from pathlib import Path as _Path
-                    script_path = _Path(__file__).parent.parent / "Scripts" / "reorganize_cropped_checks.py"
+
+                    script_path = (
+                        _Path(__file__).parent.parent / "Scripts" / "reorganize_cropped_checks.py"
+                    )
                     if script_path.exists():
                         subprocess.run(
-                            [sys.executable, str(script_path), "--crop-dir", str(CROPPED_CHECKS_DIR)],
+                            [
+                                sys.executable,
+                                str(script_path),
+                                "--crop-dir",
+                                str(CROPPED_CHECKS_DIR),
+                            ],
                             check=False,
                             capture_output=True,
                             timeout=30,
@@ -2392,8 +2573,7 @@ def _check_txn_looks_like_deposit(txn: dict[str, Any]) -> bool:
     """Deposit slips mis-cropped as checks (Gate A3 Auto Body ``Regular Deposit`` rows)."""
 
     text = " ".join(
-        str(txn.get(key) or "")
-        for key in ("Description", "Payee", "ReviewReason")
+        str(txn.get(key) or "") for key in ("Description", "Payee", "ReviewReason")
     ).lower()
     if "regular deposit" in text or "deposit slip" in text:
         return True
@@ -2598,19 +2778,12 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
         work = pd.concat([with_chk, without_chk], ignore_index=True)
 
     # Drop supplemental amount-only rows when register already has the same withdrawal.
-    if (
-        "Source" in work.columns
-        and "_abs_amt" in work.columns
-        and "Check#" in work.columns
-    ):
+    if "Source" in work.columns and "_abs_amt" in work.columns and "Check#" in work.columns:
         no_chk = work["Check#"].astype(str).str.strip() == ""
         reg_amts = work.loc[work["Source"] == "register", "_abs_amt"].dropna().tolist()
         drop_rows: list[int] = []
         for idx in work.index:
-            if not (
-                no_chk.loc[idx]
-                and work.at[idx, "Source"] == "check_image_crop"
-            ):
+            if not (no_chk.loc[idx] and work.at[idx, "Source"] == "check_image_crop"):
                 continue
             amt = work.at[idx, "_abs_amt"]
             if pd.isna(amt):
@@ -2624,10 +2797,7 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
         seen_supp_amts: set[float] = set()
         drop_rows: list[int] = []
         for idx in work.index:
-            if not (
-                no_chk.loc[idx]
-                and work.at[idx, "Source"] == "check_image_crop"
-            ):
+            if not (no_chk.loc[idx] and work.at[idx, "Source"] == "check_image_crop"):
                 continue
             amt = work.at[idx, "_abs_amt"]
             if pd.isna(amt):
@@ -3022,9 +3192,11 @@ def _run_azure_ocr_via_document_intelligence(
 
         check_txns = checks_to_transaction_rows(checks)
 
-        supplemental_check_txns, assembly_stats, register_prune_indices = _filter_supplemental_check_txns(
-            register_txns,
-            check_txns,
+        supplemental_check_txns, assembly_stats, register_prune_indices = (
+            _filter_supplemental_check_txns(
+                register_txns,
+                check_txns,
+            )
         )
         if assembly_stats.get("register_incomplete") and supplemental_check_txns:
             summary_wdr = statement_summary.get("withdrawals")
@@ -3195,7 +3367,12 @@ def _run_azure_ocr_via_document_intelligence(
 
         # Quota context for the user (especially important on free/restricted tiers)
         if check_meta:
-            calls_made = check_meta.get("per_page_calls") or check_meta.get("crop_files_analyzed") or len(checks) or "?"
+            calls_made = (
+                check_meta.get("per_page_calls")
+                or check_meta.get("crop_files_analyzed")
+                or len(checks)
+                or "?"
+            )
             logs.append(
                 _log(
                     "info",
