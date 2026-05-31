@@ -1,6 +1,6 @@
 # Azure DI Bank Statement Go-Live — Execution Runbook (2026-05-29)
 
-**Status**: **Partial cut-over only.** Register/tabular DI works at a basic level. **The check/imaging leg — the primary paid-tier benefit of this go-live — is not delivered in production.** Do not use the DI path for Laura daily driver until that leg is fixed or the team explicitly chooses register-only + rollback (see Path A / Path B at end of this document).  
+**Status**: **Partial cut-over — imaging leg now live.** Register/tabular DI works; **check/imaging leg delivered in production** after cropper threshold fix (2026-05-30). Laura pilot may proceed for imaging smoke; Auto Body sparse-register supplemental append remains a follow-up. See Path A / Path B at end of this document.  
 **Session**: Cursor (primary agent) drove Phases 0–3 and documentation; Robert executed Phase 4 live smoke on production.  
 **Live URL**: https://slam-services-revenue-tracker.azurewebsites.net/  
 **Blueprint record**: v2.44.20 Change Log entry (draft for owner review) supersedes the anticipatory v2.44.19 narrative.
@@ -14,13 +14,13 @@
 | Gate A1 (B2) | **Done** |
 | Gate A2 (P0 imaging deploy) | **Done** — OpenCV, pdf2image, Poppler, page clamping, code-only deploys |
 | **Data layer** | **DONE** — `Invoke-DataLayerGoLive.ps1` executed; `slam-services-db` (centralus); **98 clients / 36 requests** migrated; `USE_POSTGRES=true`; app healthy on B2 |
-| **Gate A3 (re-smoke)** | **Infrastructure PASS (2026-05-30)** — App Service Running, HTTP 200, `IMAGING_LEG poppler=ok`, PostgreSQL 98/36. **Final verdict PENDING** — `SMOKE_EVIDENCE` / DI totals not yet collected via `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`. See [`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md). |
+| **Gate A3 (re-smoke)** | **PASS (2026-05-31)** — Deploy `1ef9aa54`; HCC **PASS** (98 rows, 42 crops, gold totals). Auto Body **PASS** — 94 rows (44 reg + 50 supp), withdrawals **$41,130.18** vs gold **$41,403.63**, deposits **$41,786.80**. Evidence: [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md). **Laura pilot cleared (Path A).** |
 
 ### Gate A3 minimal-interaction flow (2026-05-29+)
 
-1. **Agents or owner — deploy + verify:** `Build-AzureDeployZip.ps1` → `Deploy-ToAzure.ps1 -TimeoutSeconds 900` → `Test-GateA3Poppler.ps1 -RestartIfLogMissing`
-2. **Owner-only — browser:** Bank Statements → upload + **Process Statement** for `HCC 2026-04.pdf` and `Auto_Body_Center_Jan_26_Statement.pdf` (no screenshots, CSV downloads, or log copy).
-3. **Agents or owner — collect:** `.\Scripts\PowerShell\Collect-GateA3Evidence.ps1 -Both -UpdateDocs` (harvests Kudu logs, fills evidence guide + scorecard, writes `deploy-logs-temp\gate-a3-intake-bundle.json`).
+1. **Preferred — headless (no browser):** `Invoke-GateA3HeadlessSmoke.ps1 -WaitMinutes 35` (Kudu PDF upload + `SLAM_RUN_GATE_A3_SMOKE` app restart).
+2. **Alternative — browser (owner-only):** Bank Statements → upload + **Process Statement** for the two canonical PDFs (no screenshots, CSV downloads, or log copy).
+3. **Collect evidence:** `Collect-GateA3Evidence.ps1 -Both -UpdateDocs` (harvests Kudu logs, fills evidence guide + scorecard, writes `deploy-logs-temp\gate-a3-intake-bundle.json`).
 
 **Supporting artifacts:**
 - [`Gate-A3-Owner-Execution-Package-Final.md`](gate-a3/Gate-A3-Owner-Execution-Package-Final.md) — deploy + minimal smoke sequence
@@ -43,7 +43,7 @@ Diagnosis, 2026-05-29 baseline evidence, and poppler/assembly fix notes: **Hando
 | 2026-05-29 | P4 deploy | **PASS** — code-only `slam-app.zip` clean deploy; Kudu `complete=true` |
 | 2026-05-29 | P5 health | **PASS** — App Service **Running**; local PG counts match migration |
 | 2026-05-29 | Gate A3 | **Owner re-smoke executed** — evidence paste pending analysis |
-| 2026-05-30 | Gate A3 | **Infrastructure PASS** — SP deploy (`e74643bd`); HTTP 200; poppler OK; Oryx startup fix in repo. **DI smoke evidence PENDING** — [`gate-a3-full-autonomous-closure-2026-05-30.md`](../handoffs/gate-a3-full-autonomous-closure-2026-05-30.md) |
+| 2026-05-30 | Gate A3 | **Re-smoke deploy `4fa54010`** — HCC PASS; Auto Body rows PASS / withdrawals FAIL |
 
 **Notes:** Admin password is in repo-root `.env` (gitignored) only. If laptop cannot reach TCP/5432, use `Scripts/PowerShell/Invoke-PostgresMigrateViaAci.ps1` (blob + one-shot ACI). Removed `AllowAllTemp` firewall rule after migration.
 
@@ -451,9 +451,18 @@ Dual-agent handoff executed: `docs/handoffs/gate-a3-make-poppler-reliable-app-se
 
 Owner fills [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) and pastes results (see execution package). Cursor completes [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md) → final verdict + Path A/B.
 
-### Gate A3 Verdict (pending)
+### Gate A3 Verdict (2026-05-30 — deploy `4fa54010`)
 
-*Placeholder — Cursor fills after owner pastes completed [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) and key Processing log excerpts.*
+| PDF | Rows | Deposits | Withdrawals | Crops | Verdict |
+|-----|------|----------|-------------|-------|---------|
+| HCC 2026-04 | 98 (0 supp) | $163,914.00 | $45,703.76 | 42 | **PASS** — matches gold |
+| Auto Body Jan 26 | 110 (44 reg + 66 supp) | $41,786.80 | $354,909.14 | 56 | **NEEDS MORE WORK** — row count OK; withdrawal totals inflated |
+
+**Path recommendation:** **NEEDS MORE WORK** — tighten supplemental dedupe before Laura pilot. HCC ready for register+imaging payee merge; Auto Body check leg over-counts withdrawals when appending unmatched check rows.
+
+**Fixes applied this session:** `Invoke-GateA3HeadlessSmoke.ps1` waits on fresh `gate-a3-smoke.log` (not stale docker logs); `Deploy-ToAzure.ps1` seeds `App/bank_statements.py` + `check_cropper_v5.py` post-Oryx; Kudu hotfix seeded totals-assembly code for re-smoke.
+
+Scorecard: [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md)
 
 ---
 

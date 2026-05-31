@@ -579,6 +579,53 @@ def _dedupe_check_dicts(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+_CHECK_AMOUNT_CAP = 10_000.0
+
+
+def _pick_best_checks_per_crop(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """When Azure DI returns multiple checks for one crop PNG, keep the most plausible."""
+
+    import statistics
+    from collections import defaultdict
+
+    if not checks:
+        return []
+
+    valid_amounts: list[float] = []
+    for check in checks:
+        try:
+            amt = abs(float(check.get("amount") or 0))
+        except (TypeError, ValueError):
+            continue
+        if 0 < amt <= _CHECK_AMOUNT_CAP:
+            valid_amounts.append(amt)
+    median = statistics.median(valid_amounts) if valid_amounts else 0.0
+
+    by_crop: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    no_crop: list[dict[str, Any]] = []
+    for check in checks:
+        crop = str(check.get("crop_file") or "").strip()
+        if crop:
+            by_crop[crop].append(check)
+        else:
+            no_crop.append(check)
+
+    def _score(check: dict[str, Any]) -> tuple[int, float]:
+        try:
+            amt = abs(float(check.get("amount") or 0))
+        except (TypeError, ValueError):
+            amt = 0.0
+        if amt <= 0 or amt > _CHECK_AMOUNT_CAP:
+            return (2, 999_999.0)
+        has_num = 0 if str(check.get("check_number") or "").strip() else 1
+        return (has_num, abs(amt - median))
+
+    picked: list[dict[str, Any]] = list(no_crop)
+    for group in by_crop.values():
+        picked.append(group[0] if len(group) == 1 else min(group, key=_score))
+    return picked
+
+
 def analyze_checks_from_crop_directory(
     crop_dir: Path | str,
     *,
@@ -624,6 +671,7 @@ def analyze_checks_from_crop_directory(
             failed += 1
             warnings.append(f"{png_path.name}: {exc}")
 
+    all_checks = _pick_best_checks_per_crop(all_checks)
     all_checks = _dedupe_check_dicts(all_checks)
     check_status = azure_check_reader_status()
     meta = {

@@ -931,6 +931,19 @@ def run_check_cropper_only(
             old_png.unlink()
         except OSError:
             pass
+    for sub in ("checks", "deposits"):
+        subdir = CROPPED_CHECKS_DIR / sub
+        if subdir.is_dir():
+            for stale in subdir.glob("*.png"):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+    for stale_json in CROPPED_CHECKS_DIR.glob("check_*.json"):
+        try:
+            stale_json.unlink()
+        except OSError:
+            pass
 
     try:
         from check_cropper_v5 import crop_pdf_checks
@@ -2483,7 +2496,127 @@ def _dedupe_azure_transactions(df: pd.DataFrame) -> pd.DataFrame:
         )
         work = work[~drop_mask]
 
+        # Collapse duplicate amount-only supplemental rows (multi-crop OCR bleed).
+        seen_supp_amts: set[float] = set()
+        drop_rows: list[int] = []
+        for idx in work.index:
+            if not (
+                no_chk.loc[idx]
+                and work.at[idx, "Source"] == "check_image_crop"
+            ):
+                continue
+            amt = work.at[idx, "_abs_amt"]
+            if pd.isna(amt):
+                continue
+            if amt in seen_supp_amts:
+                drop_rows.append(idx)
+            else:
+                seen_supp_amts.add(float(amt))
+        if drop_rows:
+            work = work.drop(index=drop_rows)
+
     return work.drop(columns=["_chk", "_abs_amt"], errors="ignore").reset_index(drop=True)
+
+
+def _pdf_register_page_text(pdf_bytes: bytes, pages_str: str) -> str:
+    """Extract text from register/tabular pages for Statement Summary parsing."""
+
+    if not pages_str.strip():
+        return ""
+    page_nums: list[int] = []
+    for part in pages_str.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start_s, end_s = token.split("-", 1)
+            try:
+                start_i, end_i = int(start_s), int(end_s)
+                page_nums.extend(range(start_i, end_i + 1))
+            except ValueError:
+                continue
+        else:
+            try:
+                page_nums.append(int(token))
+            except ValueError:
+                continue
+    if not page_nums:
+        return ""
+
+    try:
+        import pdfplumber
+    except ImportError:
+        return ""
+
+    chunks: list[str] = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page_num in page_nums:
+            if 1 <= page_num <= len(pdf.pages):
+                chunks.append(pdf.pages[page_num - 1].extract_text() or "")
+    return "\n".join(chunks)
+
+
+def _statement_summary_from_register_pages(
+    pdf_bytes: bytes,
+    pages_str: str,
+) -> dict[str, Any]:
+    """Parse authoritative deposit/withdrawal totals from the Statement Summary block."""
+
+    text = _pdf_register_page_text(pdf_bytes, pages_str)
+    if not text.strip():
+        return {}
+    try:
+        from local_enhanced_ocr import _extract_statement_summary
+    except ImportError:
+        return {}
+    return _extract_statement_summary(text)
+
+
+def _trim_supplemental_to_withdrawal_budget(
+    supplemental: list[dict[str, Any]],
+    budget: float,
+    *,
+    tolerance: float = 500.0,
+    max_rows: int | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop lowest-quality supplemental rows when imaging leg overshoots summary withdrawals."""
+
+    if budget <= 0 or not supplemental:
+        return supplemental, 0
+
+    total = sum(abs(_parse_transaction_amount(row) or 0.0) for row in supplemental)
+    if total <= budget + tolerance and (max_rows is None or len(supplemental) <= max_rows):
+        return supplemental, 0
+
+    import statistics
+
+    amounts = [
+        abs(_parse_transaction_amount(row) or 0.0)
+        for row in supplemental
+        if (_parse_transaction_amount(row) or 0) != 0
+    ]
+    median = statistics.median(amounts) if amounts else 0.0
+
+    def _quality_key(row: dict[str, Any]) -> tuple[int, float]:
+        has_num = 0 if _normalize_check_number(row.get("Check#")) else 1
+        amt = abs(_parse_transaction_amount(row) or 0.0)
+        return (has_num, abs(amt - median))
+
+    ranked = sorted(supplemental, key=_quality_key)
+    picked: list[dict[str, Any]] = []
+    running = 0.0
+    for row in ranked:
+        if max_rows is not None and len(picked) >= max_rows:
+            break
+        amt = abs(_parse_transaction_amount(row) or 0.0)
+        if running + amt <= budget + tolerance:
+            picked.append(row)
+            running += amt
+
+    if running < budget - tolerance:
+        return supplemental, 0
+
+    return picked, len(supplemental) - len(picked)
 
 
 def _merge_azure_checks_into_transactions(
@@ -2612,6 +2745,7 @@ def _run_azure_ocr_via_document_intelligence(
         logs.append(_log("info", filter_msg or "Azure DI page routing complete."))
         register_txns: list[dict[str, str]] = []
         di_meta: dict[str, Any] = {}
+        statement_summary: dict[str, Any] = {}
         if pages_str:
             logs.append(
                 _log(
@@ -2636,6 +2770,16 @@ def _run_azure_ocr_via_document_intelligence(
                     "No register pages for bank-statement model after excluding check-image pages.",
                 )
             )
+
+        statement_summary = _statement_summary_from_register_pages(pdf_bytes, pages_str)
+        if statement_summary:
+            meta["statement_summary"] = statement_summary
+            meta["grok_totals"] = {
+                "deposits": statement_summary.get("deposits"),
+                "withdrawals": statement_summary.get("withdrawals"),
+                "checks": statement_summary.get("withdrawals_count"),
+                "transactions": None,
+            }
 
         crop_logs, crop_meta = run_check_cropper_only(
             pdf_bytes,
@@ -2757,6 +2901,25 @@ def _run_azure_ocr_via_document_intelligence(
             register_txns,
             check_txns,
         )
+        if assembly_stats.get("register_incomplete") and supplemental_check_txns:
+            summary_wdr = statement_summary.get("withdrawals")
+            if isinstance(summary_wdr, (int, float)) and float(summary_wdr) > 0:
+                max_rows = statement_summary.get("withdrawals_count")
+                max_row_cap = int(max_rows) if isinstance(max_rows, int) and max_rows > 0 else None
+                supplemental_check_txns, trimmed = _trim_supplemental_to_withdrawal_budget(
+                    supplemental_check_txns,
+                    float(summary_wdr),
+                    max_rows=max_row_cap,
+                )
+                if trimmed:
+                    assembly_stats["supplemental_trimmed_to_summary"] = trimmed
+                    logs.append(
+                        _log(
+                            "info",
+                            f"Trimmed {trimmed} supplemental check row(s) to align with "
+                            f"Statement Summary withdrawals (${float(summary_wdr):,.2f}).",
+                        )
+                    )
         register_txns = _prune_register_for_supplemental(
             register_txns,
             register_incomplete=bool(assembly_stats.get("register_incomplete")),
@@ -2778,6 +2941,9 @@ def _run_azure_ocr_via_document_intelligence(
         meta["supplemental_by_amount"] = int(assembly_stats.get("supplemental_by_amount") or 0)
         meta["supplemental_rejected_outliers"] = int(
             assembly_stats.get("supplemental_rejected_outliers") or 0
+        )
+        meta["supplemental_rejected_deposits"] = int(
+            assembly_stats.get("supplemental_rejected_deposits") or 0
         )
         meta["register_rows_pruned"] = int(assembly_stats.get("register_rows_pruned") or 0)
         meta["unmatched_check_rows"] = int(assembly_stats.get("unmatched_check_rows") or 0)

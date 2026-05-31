@@ -20,6 +20,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "App"))
 
+import azure_document_intelligence as adi  # noqa: E402
 import bank_statements as bs  # noqa: E402
 
 
@@ -251,6 +252,44 @@ def test_duplicate_check_number_keeps_median_nearest() -> None:
     assert float(chk501[0]["SignedAmount"]) == -280.00
 
 
+def test_pick_best_checks_per_crop() -> None:
+    checks = [
+        {"crop_file": "check_P05C00.png", "amount": 280.0, "check_number": "501", "pay_to": "Vendor"},
+        {"crop_file": "check_P05C00.png", "amount": 6904.99, "check_number": "501", "pay_to": "Vendor OCR"},
+        {"crop_file": "check_P05C01.png", "amount": 150.0, "check_number": "502", "pay_to": "Other"},
+    ]
+    picked = adi._pick_best_checks_per_crop(checks)
+    assert len(picked) == 2
+    by_crop = {c["crop_file"]: c for c in picked}
+    assert float(by_crop["check_P05C00.png"]["amount"]) == 280.0
+
+
+def test_trim_supplemental_to_withdrawal_budget() -> None:
+    supplemental = [
+        _check_row("High quality", 400.00, check_number="1001"),
+        _check_row("Noise A", 9000.00),
+        _check_row("Noise B", 8500.00),
+        _check_row("Good B", 350.00, check_number="1002"),
+    ]
+    trimmed, dropped = bs._trim_supplemental_to_withdrawal_budget(supplemental, 800.0)
+    assert dropped >= 1
+    assert sum(abs(float(r["SignedAmount"])) for r in trimmed) <= 1300.0
+
+
+def test_dedupe_azure_transactions_collapses_supplemental_amount_dupes() -> None:
+    df = pd.DataFrame(
+        [
+            {"Check#": "", "SignedAmount": "-250.00", "Source": "check_image_crop"},
+            {"Check#": "", "SignedAmount": "-250.00", "Source": "check_image_crop"},
+            {"Check#": "", "SignedAmount": "-999.00", "Source": "check_image_crop"},
+        ]
+    )
+    out = bs._dedupe_azure_transactions(df)
+    assert len(out) == 2
+    amounts = sorted(abs(float(x)) for x in out["SignedAmount"])
+    assert amounts == [250.0, 999.0]
+
+
 def main() -> int:
     test_hcc_complete_register_no_supplemental()
     test_auto_body_incomplete_register_appends_unmatched_checks()
@@ -264,6 +303,9 @@ def main() -> int:
     test_outlier_check_amounts_rejected()
     test_deposit_like_checks_skipped()
     test_duplicate_check_number_keeps_median_nearest()
+    test_pick_best_checks_per_crop()
+    test_trim_supplemental_to_withdrawal_budget()
+    test_dedupe_azure_transactions_collapses_supplemental_amount_dupes()
     print("\n[OK] All Azure assembly regression checks passed.")
     return 0
 
