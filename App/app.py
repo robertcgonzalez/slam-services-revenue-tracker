@@ -291,7 +291,7 @@ SLAM_CSS = """
     }
     .slam-priority-hero h4 {
         margin: 0 0 0.5rem 0;
-        color: #7f1d1d;
+        color: #5c1010;
         font-size: 1.2rem;
         font-weight: 700;
     }
@@ -364,9 +364,9 @@ SLAM_CSS = """
         border: 1px solid #6ee7b7;
     }
     .slam-status-pill-warn {
-        background: #fee2e2;
-        color: #991b1b;
-        border: 1px solid #fca5a5;
+        background: #fecaca;
+        color: #7f1d1d;
+        border: 1px solid #f87171;
     }
     .slam-sidebar-section-label {
         color: #475569;
@@ -1233,7 +1233,7 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
     st.markdown(
         f'<div class="slam-dashboard-hero">'
         f'<h2 class="slam-dashboard-greeting">{greeting}, {user}!</h2>'
-        f'<p class="slam-dashboard-tagline">Your revenue command center — check Today\'s priority below.</p>'
+        f'<p class="slam-dashboard-tagline">Your revenue command center.</p>'
         f'<p class="slam-dashboard-date">{date_str}</p>'
         f"</div>",
         unsafe_allow_html=True,
@@ -1255,7 +1255,12 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
             st.session_state["goto_page"] = "Bank Statements"
             st.rerun()
     with qa2:
-        if st.button("🔄 Refresh Data", key="dash_qa_reload", use_container_width=True):
+        if st.button(
+            "🔄 Refresh Data",
+            type="secondary",
+            key="dash_qa_reload",
+            use_container_width=True,
+        ):
             if st.session_state.get("revenue_unsaved"):
                 st.error(
                     "You have unsaved edits on Revenue Requests. Save or undo before reloading."
@@ -1269,6 +1274,7 @@ def dashboard_page(clients_df, req_df, filtered, filters: dict | None = None):
         with qa3:
             if st.button(
                 f"🔴 View Overdue ({overdue_total})",
+                type="secondary",
                 key="dash_qa_overdue",
                 use_container_width=True,
             ):
