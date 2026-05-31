@@ -133,6 +133,9 @@ $settings = @{
     "AZURE_DI_CHECK_MODEL"              = "prebuilt-check.us"
     "SLAM_IMAGING_FIRST_PAGE"           = "5"
     "SLAM_IMAGING_LAST_PAGE"            = "9"
+    # Geometry cropper v5 — Gate A3 validated (HCC ~42, Auto Body ~58 crops @ 300 DPI)
+    "SLAM_CROP_DPI"                     = "300"
+    "SLAM_CROP_MIN_HEIGHT"              = "320"
     # Backward-compat aliases so older code paths (if any) still work
     "AZURE_OCR_FUNCTION_URL"            = $endpoint.Trim()
     "AZURE_OCR_FUNCTION_KEY"            = $key.Trim()

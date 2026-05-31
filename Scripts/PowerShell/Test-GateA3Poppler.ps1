@@ -113,6 +113,26 @@ try {
     }
 
     if (-not $found) {
+        # startup.sh emits IMAGING_LEG to stdout; Azure persists it under LogFiles/StartupLogs/
+        $startupLogs = $logs | Where-Object { $_.name -like "StartupLogs/*" } |
+            Sort-Object name -Descending | Select-Object -First 4
+        foreach ($slog in $startupLogs) {
+            try {
+                $scontent = (Invoke-WebRequest -Uri "$ScmBase/api/vfs/LogFiles/$($slog.name)" `
+                    -Headers $headers -UseBasicParsing -TimeoutSec 60).Content
+            } catch { continue }
+            if ($scontent -match "IMAGING_LEG poppler=ok") {
+                Write-Host "[OK] Found IMAGING_LEG poppler=ok in $($slog.name)" -ForegroundColor Green
+                $found = $true
+                break
+            }
+            if ($scontent -match "IMAGING_LEG poppler=missing") {
+                Write-Warning "Found IMAGING_LEG poppler=missing in $($slog.name)"
+            }
+        }
+    }
+
+    if (-not $found) {
         if ($RestartIfLogMissing) {
             Write-Host "Marker not found. Restarting app..." -ForegroundColor Yellow
             az webapp restart -g $ResourceGroup -n $AppName
@@ -120,7 +140,7 @@ try {
             & $PSCommandPath -RestartIfLogMissing:$false -CheckSmokeEvidence:$CheckSmokeEvidence
             return
         } else {
-            Write-Warning "IMAGING_LEG poppler=ok not found in recent LogFiles (app stdout may be in log tail only)."
+            Write-Warning "IMAGING_LEG poppler=ok not found in docker or StartupLogs (run az webapp log tail after restart)."
         }
     }
 } catch {

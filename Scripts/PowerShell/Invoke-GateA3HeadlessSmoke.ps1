@@ -56,6 +56,18 @@ if (-not (Test-Path (Join-Path $RepoRoot $runner))) {
     throw "Runner missing: $runner"
 }
 
+function Test-FreshSmokeLogComplete {
+    param([string]$LogText)
+    if ([string]::IsNullOrWhiteSpace($LogText)) { return $false }
+    return ($LogText -match "DONE HCC 2026-04\.pdf") -and `
+        ($LogText -match "DONE Auto_Body_Center_Jan_26_Statement\.pdf")
+}
+
+# Clear prior run markers so we never accept stale SMOKE_EVIDENCE from older docker logs.
+$smokeLogUri = "$ScmBase/api/vfs/site/wwwroot/tmp/gate-a3-smoke.log"
+Write-Host "Truncating gate-a3-smoke.log (fresh-run marker)..." -ForegroundColor DarkGray
+Set-VfsFile -Uri $smokeLogUri -Bytes @() -Headers $headers
+
 # Kudu /api/command runs in the Kudu sandbox (no Oryx antenv). Run DI in the app container via
 # SLAM_RUN_GATE_A3_SMOKE + restart so startup.sh launches the runner with production deps.
 Write-Host "Enabling SLAM_RUN_GATE_A3_SMOKE and restarting app (DI runs in app container)..." -ForegroundColor Yellow
@@ -63,17 +75,26 @@ az webapp config appsettings set -g $ResourceGroup -n $AppName `
     --settings SLAM_RUN_GATE_A3_SMOKE=true -o none | Out-Null
 az webapp restart -g $ResourceGroup -n $AppName | Out-Null
 
-$collector = Join-Path $PSScriptRoot "Collect-GateA3Evidence.ps1"
 $deadline = (Get-Date).AddMinutes($WaitMinutes)
 $ok = $false
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 45
     try {
-        & $collector -Both -DryRun -ErrorAction Stop 2>$null
-        if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+        $logText = (Invoke-WebRequest -Uri $smokeLogUri -Headers $headers -UseBasicParsing -TimeoutSec 120).Content
+        if (Test-FreshSmokeLogComplete -LogText $logText) {
+            $ok = $true
+            break
+        }
+        $tail = ($logText -split "`n") | Where-Object { $_ -match "^DONE |^=== Processing" } | Select-Object -Last 2
+        if ($tail) {
+            Write-Host "  In progress: $($tail -join ' | ')" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  Waiting for gate-a3-smoke.log output..." -ForegroundColor DarkGray
+        }
     }
-    catch { }
-    Write-Host "  Waiting for SMOKE_EVIDENCE in logs..." -ForegroundColor DarkGray
+    catch {
+        Write-Host "  Waiting for gate-a3-smoke.log..." -ForegroundColor DarkGray
+    }
 }
 
 az webapp config appsettings set -g $ResourceGroup -n $AppName `

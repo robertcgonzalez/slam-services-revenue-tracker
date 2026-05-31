@@ -60,7 +60,7 @@ python Scripts/health_check.py --full
 - **Azure OCR Function** (`slam-ocr-function`): parked; not the production path.
 - **CSV mode**: zero-disruption fallback when Postgres is disabled (requires server-side CSVs — not for daily driver).
 
-**Full history**: Blueprint Change Log (v2.30 → **v2.44.28**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
+**Full history**: Blueprint Change Log (v2.30 → **v2.44.32**). State Alignment process: [`QMS/State-Alignment/process.md`](QMS/State-Alignment/process.md) (active since v2.44.9).
 
 ---
 

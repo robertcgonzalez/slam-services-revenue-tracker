@@ -90,7 +90,7 @@ function Harvest-KuduLogs {
     $entries = Invoke-RestMethod -Uri $logUri -Headers $Headers
     $dockerLogs = $entries | Where-Object {
         $_.name -like "*docker.log" -or $_.name -like "*default_docker.log" `
-            -or $_.name -like "*containerStream.log"
+            -or $_.name -like "*containerStream.log" -or $_.name -like "StartupLogs/*"
     } | Sort-Object name -Descending
 
     if ($Minutes -gt 0) {

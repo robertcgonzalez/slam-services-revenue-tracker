@@ -127,6 +127,7 @@ python Scripts/health_check.py --csv     # validates CSV fallback path
 | `SLAM_LOCAL_OCR_MAX_CHECKS` | 40 (default); raise if cropping truncates on long statements. |
 | `AZURE_CV_ENDPOINT` / `AZURE_CV_KEY` | Live Azure CV Read on check photos (Local Enhanced auto-enables when set). Keep in `.env` only. |
 | `SLAM_IMAGING_FIRST_PAGE` / `SLAM_IMAGING_LAST_PAGE` | Imaging-page scope for CV crop OCR (Traditions hard PDF: `5` / `9`). |
+| `SLAM_CROP_DPI` / `SLAM_CROP_MIN_HEIGHT` | Geometry cropper v5 (production + local DI path): **300** / **320** (Gate A3 validated). Override via App Settings or env. |
 | `SLAM_CV_CACHE_DIR` | Optional cache for zero-cost dev reruns (reuses saved CV JSON; enables CV leg without live calls). |
 | `SLAM_CLIENT_NAME` | Optional client hint for bank profile / payee scoring. |
 | `AZURE_DI_ENDPOINT` / `AZURE_DI_KEY` + `AZURE_DI_MODEL` / `AZURE_DI_CHECK_MODEL` | Production Azure Document Intelligence (two-leg bank statement pipeline). Normally set via `Set-AzureBankStatementDIAppSettings.ps1` on the App Service; use the local equivalent setter for Robert's machine. |

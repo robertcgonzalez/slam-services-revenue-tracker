@@ -1,6 +1,6 @@
 # Azure DI Bank Statement Go-Live — Execution Runbook (2026-05-29)
 
-**Status**: **Partial cut-over — imaging leg now live.** Register/tabular DI works; **check/imaging leg delivered in production** after cropper threshold fix (2026-05-30). Laura pilot may proceed for imaging smoke; Auto Body sparse-register supplemental append remains a follow-up. See Path A / Path B at end of this document.  
+**Status**: **Gate A3 fully PASS (2026-05-31).** Register + check/imaging two-leg DI validated on production (deploy `1ef9aa54`). **Laura pilot cleared (Path A).** See Gate A3 verdict below and [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md).  
 **Session**: Cursor (primary agent) drove Phases 0–3 and documentation; Robert executed Phase 4 live smoke on production.  
 **Live URL**: https://slam-services-revenue-tracker.azurewebsites.net/  
 **Blueprint record**: v2.44.20 Change Log entry (draft for owner review) supersedes the anticipatory v2.44.19 narrative.
@@ -451,16 +451,16 @@ Dual-agent handoff executed: `docs/handoffs/gate-a3-make-poppler-reliable-app-se
 
 Owner fills [`Gate-A3-Final-Re-Smoke-Evidence-Guide.md`](gate-a3/Gate-A3-Final-Re-Smoke-Evidence-Guide.md) and pastes results (see execution package). Cursor completes [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md) → final verdict + Path A/B.
 
-### Gate A3 Verdict (2026-05-30 — deploy `4fa54010`)
+### Gate A3 Verdict (2026-05-31 — deploy `1ef9aa54`, v2.44.32)
 
 | PDF | Rows | Deposits | Withdrawals | Crops | Verdict |
 |-----|------|----------|-------------|-------|---------|
 | HCC 2026-04 | 98 (0 supp) | $163,914.00 | $45,703.76 | 42 | **PASS** — matches gold |
-| Auto Body Jan 26 | 110 (44 reg + 66 supp) | $41,786.80 | $354,909.14 | 56 | **NEEDS MORE WORK** — row count OK; withdrawal totals inflated |
+| Auto Body Jan 26 | 94 (44 reg + 50 supp) | $41,786.80 | $41,130.18 | 56 | **PASS** — withdrawals vs gold $41,403.63 |
 
-**Path recommendation:** **NEEDS MORE WORK** — tighten supplemental dedupe before Laura pilot. HCC ready for register+imaging payee merge; Auto Body check leg over-counts withdrawals when appending unmatched check rows.
+**Path recommendation:** **Path A — Laura pilot cleared.** Stale-crop purge + supplemental dedupe fix (v2.44.31–32). Headless: `Invoke-GateA3HeadlessSmoke.ps1` then `Collect-GateA3Evidence.ps1 -Both -UpdateDocs`.
 
-**Fixes applied this session:** `Invoke-GateA3HeadlessSmoke.ps1` waits on fresh `gate-a3-smoke.log` (not stale docker logs); `Deploy-ToAzure.ps1` seeds `App/bank_statements.py` + `check_cropper_v5.py` post-Oryx; Kudu hotfix seeded totals-assembly code for re-smoke.
+**Fixes retained:** Fresh `gate-a3-smoke.log` waiter; `Deploy-ToAzure.ps1` `Seed-WwwRootAppHotfix` post-Oryx; cropper defaults DPI=300 / min_height=320.
 
 Scorecard: [`Gate-A3-Post-Smoke-Scorecard-Scaffolding.md`](gate-a3/Gate-A3-Post-Smoke-Scorecard-Scaffolding.md)
 

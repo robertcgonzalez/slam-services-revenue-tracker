@@ -53,8 +53,8 @@ Browser upload remains optional (Laura path); not required for autonomous assess
 |-------|--------|
 | Dashboard / Revenue Requests / Postgres | **Ready** |
 | Bank Statements — register DI | **Ready** (HCC 98 rows verified) |
-| Bank Statements — check/imaging leg | **HCC ready** — crops + payee merge; **Auto Body NEEDS WORK** — supplemental append inflates withdrawals |
-| Laura pilot | **Blocked** — Auto Body withdrawal totals fail gold threshold |
+| Bank Statements — check/imaging leg | **Ready** — HCC + Auto Body PASS (deploy `1ef9aa54`, v2.44.32) |
+| Laura pilot | **Cleared (Path A)** |
 
 ## Re-smoke session (deploy `4fa54010`, 2026-05-30 22:24 UTC)
 

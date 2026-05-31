@@ -12,6 +12,9 @@ Runs against the cached EasyOCR lines at ``Scripts/_easyocr_cache_200.json``
 fully offline and finishes in <2 seconds — no rasterization, no EasyOCR
 model load. Re-cache when the cropper or OCR engine changes meaningfully.
 
+Azure DI assembly (register + check supplemental dedupe) is covered separately
+by ``Scripts/test_azure_assembly.py`` (HCC + Auto Body fixture patterns).
+
 Usage:
     python Scripts/test_local_ocr_regression.py
     pytest Scripts/test_local_ocr_regression.py        # also works

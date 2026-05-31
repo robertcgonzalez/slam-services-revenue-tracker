@@ -21,12 +21,13 @@ from typing import Any
 
 from app_logging import format_pipeline_log as _log
 
-_DEFAULT_DPI = int(os.environ.get("SLAM_CROP_DPI", "400"))
+_DEFAULT_DPI = int(os.environ.get("SLAM_CROP_DPI", "300"))
 _DPI_SCALE = _DEFAULT_DPI / 300.0   # Base tuning was done around 300 DPI
 
 _MIN_WIDTH = int(os.environ.get("SLAM_CROP_MIN_WIDTH", str(int(120 * _DPI_SCALE))))
 _MAX_WIDTH = int(os.environ.get("SLAM_CROP_MAX_WIDTH", str(int(1700 * _DPI_SCALE))))
-_MIN_HEIGHT = int(os.environ.get("SLAM_CROP_MIN_HEIGHT", str(int(500 * _DPI_SCALE))))
+# 320px @ 300 DPI — Gate A3 HCC/Auto Body imaging pages; 500 was too tall (0 crops at 400 DPI).
+_MIN_HEIGHT = int(os.environ.get("SLAM_CROP_MIN_HEIGHT", str(int(320 * _DPI_SCALE))))
 _MAX_HEIGHT = int(os.environ.get("SLAM_CROP_MAX_HEIGHT", str(int(1100 * _DPI_SCALE))))
 _MIN_ASPECT = float(os.environ.get("SLAM_CROP_MIN_ASPECT", "1.4"))
 _MAX_ASPECT = float(os.environ.get("SLAM_CROP_MAX_ASPECT", "3.2"))

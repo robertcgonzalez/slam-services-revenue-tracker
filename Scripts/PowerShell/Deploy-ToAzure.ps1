@@ -121,6 +121,23 @@ function Test-PopplerViaKudu {
     }
 }
 
+function Seed-WwwRootAppHotfix {
+    param([string]$RepoRoot, [string]$ScmBase, [hashtable]$Headers)
+    # Oryx tarball sync can leave stale App/*.py on wwwroot; seed Gate A3-critical modules from repo.
+    $files = @("App/bank_statements.py", "App/check_cropper_v5.py")
+    foreach ($rel in $files) {
+        $local = Join-Path $RepoRoot ($rel -replace '/', [IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path $local)) { continue }
+        $bytes = [IO.File]::ReadAllBytes($local)
+        $uri = "$ScmBase/api/vfs/site/wwwroot/$rel"
+        $putHeaders = $Headers.Clone()
+        $putHeaders['If-Match'] = '*'
+        Invoke-WebRequest -Method Put -Uri $uri -Headers $putHeaders -Body $bytes `
+            -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 120 | Out-Null
+        Write-Ok "Seeded wwwroot/$rel via Kudu VFS (post-Oryx hotfix)"
+    }
+}
+
 function Publish-WwwRootStartupFiles {
     param([string]$RepoRoot, [string]$ScmBase, [hashtable]$Headers)
     $files = @("startup.sh", "runtime.txt", "apt.txt")
@@ -528,6 +545,7 @@ else {
         try {
             Publish-WwwRootStartupFiles -RepoRoot $RepoRoot -ScmBase $scmBase -Headers $kuduHeaders
             Write-Ok "Re-seeded startup.sh, runtime.txt, apt.txt after Oryx sync"
+            Seed-WwwRootAppHotfix -RepoRoot $RepoRoot -ScmBase $scmBase -Headers $kuduHeaders
         }
         catch {
             Write-Warn2 "Post-Oryx startup re-seed: $($_.Exception.Message)"
